@@ -1,6 +1,6 @@
 /**
- * CDP 版 BrowserProvider：把 DSH 的 browser seam 接到常驻的 browsersvc（M1 守护进程）
- * 或多实例 chrome-headless-shell 上，用 playwright-core 的 connectOverCDP 消费。
+ * CDP 版 BrowserProvider：把 DSH 的 browser seam 接到常驻的 browsersvc（守护进程，
+ * 单发动机 = moli serve）上，用 playwright-core 的 connectOverCDP 消费（moli 是 CDP 服务端，实测兼容）。
  *
  * 设计约束（来自 seam 契约，见 docs/design-notes.md §类型面）：
  * - `open()` 自己铸造字符串 session id；
@@ -1064,8 +1064,21 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
           await locator.setChecked(String(request.value) !== 'false' && String(request.value) !== '0' && String(request.value) !== '', { timeout: timeoutMs });
           return { method: element.type, value: String(await locator.isChecked()) };
         }
-        await locator.fill(String(request.value), { timeout: timeoutMs });
-        const method = element.tag === 'textarea' ? 'textarea' : element.editable ? 'contenteditable' : 'input';
+        let method;
+        if (element.editable) {
+          // contenteditable 不能用 locator.fill：moli 内核下 fill 走的选区替换不触发
+          // 可编辑区的正常输入管线，读回值是空的（旧仓 6 挂题之一）。直接注入 DOM 赋值 +
+          // 派发 input 事件，框架监听 input 的场景也能收到变更。
+          await locator.evaluate((el, v) => {
+            el.focus?.();
+            el.textContent = v;
+            el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: v }));
+          }, String(request.value), { timeout: timeoutMs });
+          method = 'contenteditable';
+        } else {
+          await locator.fill(String(request.value), { timeout: timeoutMs });
+          method = element.tag === 'textarea' ? 'textarea' : 'input';
+        }
         const read = await locator.evaluate(readElementValue);
         return { method, value: String(read.value ?? request.value) };
       } catch (error) {

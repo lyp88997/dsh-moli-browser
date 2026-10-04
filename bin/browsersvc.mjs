@@ -3,7 +3,8 @@
  * browsersvc —— 单例浏览器 CDP 守护进程的 CLI。
  *
  *   browsersvc start|stop|status|restart|run|logs|ops|console|network|har|cookies|detect|skills [--port=9333] [--idle-ms=900000]
- *              [--kernel=/path/to/chrome] [--wrapper=/path/to/wrapper.sh] [--root=/path/to/state]
+ *              [--kernel=/path/to/moli] [--wrapper=/path/to/wrapper.sh] [--root=/path/to/state]
+ *              [--screencast-interval-ms=1000]   # moli 推流帧间隔（需 --layout，本包恒开）
  *              [--install] [--uninstall] [--force] [--dir=$DSH_HOME/skills]   # skills：查看/落盘/撤销随包技能
  *                                                                             #（插件默认把它们注册成「系统内置」技能，落盘是可选项）
  *
@@ -44,6 +45,7 @@ const toCfg = (flags) => resolveConfig({
   userDataDir: flags['user-data-dir'],
   startTimeoutMs: flags['start-timeout'],
   internalPortBase: flags['internal-port-base'],
+  screencastIntervalMs: flags['screencast-interval-ms'],
 });
 
 function print(obj, code = 0) {
@@ -151,7 +153,16 @@ async function stop(cfg, { force = false, quiet = false } = {}) {
     const sup = st.supervisorPid ? pidCmdline(st.supervisorPid) : null;
     if (sup !== null && !sup.includes('browsersvc.mjs')) bad.push(`supervisor(${st.supervisorPid}) cmdline 不含 browsersvc.mjs：${sup}`);
     const brw = st.browserPid ? pidCmdline(st.browserPid) : null;
-    if (brw !== null && st.internalPort && !brw.includes(`--remote-debugging-port=${st.internalPort}`)) bad.push(`browser(${st.browserPid}) cmdline 不含 --remote-debugging-port=${st.internalPort}：${brw}`);
+    if (brw !== null && st.internalPort) {
+      // 内核必须监听状态文件登记的内部端口：Chrome 形参 `--remote-debugging-port=N` 或
+      // moli 形参 `--port=N` / `--port N`，任一命中即可（逐 token 比对，避免前缀误配）。
+      const tokens = brw.split(/\s+/);
+      const port = String(st.internalPort);
+      const portOk = tokens.includes(`--remote-debugging-port=${port}`)
+        || tokens.includes(`--port=${port}`)
+        || tokens.some((t, i) => t === '--port' && tokens[i + 1] === port);
+      if (!portOk) bad.push(`browser(${st.browserPid}) cmdline 不含监听端口 ${port}：${brw}`);
+    }
     if (bad.length) {
       const info = { stopped: false, refused: true, reason: 'pid 身份校验未通过，未杀任何进程，状态文件已保留（确认无误后用 browsersvc stop --force）', details: bad, stateFile: stateFile(cfg.root) };
       if (quiet) return info;
@@ -479,7 +490,7 @@ function skills(flags) {
 }
 
 const { cmd, flags } = parse(process.argv.slice(2));
-const USAGE = 'browsersvc start|stop|status|restart|run|logs|ops|console|network|har|cookies|detect|skills [--port=9333] [--idle-ms=900000] [--kernel=...] [--wrapper=...] [--root=...] [--start-timeout=30000] [--internal-port-base=9300] [--lines=20] [--out=file] [--session=s1] [--url=https://a.com] [--export=file] [--import=file] [--install] [--uninstall] [--force] [--dir=/path/to/skills] [--json]';
+const USAGE = 'browsersvc start|stop|status|restart|run|logs|ops|console|network|har|cookies|detect|skills [--port=9333] [--idle-ms=900000] [--kernel=...] [--wrapper=...] [--root=...] [--start-timeout=30000] [--internal-port-base=9300] [--screencast-interval-ms=1000] [--lines=20] [--out=file] [--session=s1] [--url=https://a.com] [--export=file] [--import=file] [--install] [--uninstall] [--force] [--dir=/path/to/skills] [--json]';
 
 try {
   const cfg = toCfg(flags);

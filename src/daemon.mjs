@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
-import { assertKernelExecutable, browserArgs, ensureRoot, logFile, stateFile } from './config.mjs';
+import { assertKernelExecutable, browserArgs, ensureRoot, logFile, MOLI_INSTALL_HINT, moliEnv, stateFile } from './config.mjs';
 import { createProxy } from './proxy.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -64,7 +64,7 @@ export function readState(root) {
 /** 前台运行守护进程；调用方 await 它直到退出。 */
 export async function runSupervisor(cfg, { log = (m) => appendFileSync(logFile(cfg.root), `${new Date().toISOString()} ${m}\n`) } = {}) {
   ensureRoot(cfg.root);
-  if (!cfg.kernel) throw new Error('未找到浏览器内核：用 --kernel <路径>、--wrapper <路径> 或 DSH_BROWSER_CHROME / DSH_BROWSER_WRAPPER 指定');
+  if (!cfg.kernel) throw new Error(MOLI_INSTALL_HINT);
   assertKernelExecutable(cfg.kernel);
 
   const token = randomUUID();
@@ -153,7 +153,7 @@ export async function runSupervisor(cfg, { log = (m) => appendFileSync(logFile(c
     const args = browserArgs(cfg, internalPort);
     log(`spawn ${cfg.kernel} ${args.join(' ')}`);
     const out = openSync(logFile(cfg.root), 'a', 0o600);
-    const child = spawn(cfg.kernel, args, { stdio: ['ignore', out, out], env: process.env });
+    const child = spawn(cfg.kernel, args, { stdio: ['ignore', out, out], env: moliEnv(process.env) });
     browser = child;
     if (shuttingDown) {
       child.kill('SIGKILL');
@@ -231,7 +231,7 @@ export async function runSupervisor(cfg, { log = (m) => appendFileSync(logFile(c
     process.stdout.write(`${JSON.stringify({ ready: true, ...state })}\n`);
   } catch (error) {
     // 启动中途失败（端口撞车、代理健康检查超时…）：先把已拉起的资源收干净再抛，
-    // 否则会留下没有状态文件、事后无法回收的孤儿 chromium。
+    // 否则会留下没有状态文件、事后无法回收的孤儿 moli。
     await shutdown('startup-failed');
     throw error;
   }
