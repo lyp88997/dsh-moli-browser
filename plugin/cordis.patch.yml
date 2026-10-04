@@ -1,0 +1,45 @@
+# dsh-moli-browser 的 bundle patch —— 装这一个包就够。
+#
+# 它做三件事：
+#   1) 挂上浏览器接缝 `browser`（实现来自本包的依赖 dsh-builtin-browser，经本包 ./browser 转出），
+#      并把 provider 选为 cdp-daemon；
+#   2) 挂上 33 个 browser_* 工具（同样来自 dsh-builtin-browser，经本包 ./tool-browser 转出）；
+#   3) 插入自建 CDP provider（连 127.0.0.1:9333 的 browsersvc）。端点不通时插件会用本包自带的
+#      bin/browsersvc.mjs 自动拉起一次（plugin/lib/provider.js 的 defaultAutoStartCommand），
+#      所以不需要自己写 autoStartCommand，也不需要先手动 start。
+#
+# 安装（一条命令，可重复执行）：
+#   dsh plugin --profile <name> add <本包 tarball 或 Release 资产 URL>
+#   # 然后重启 DSH；校验：
+#   dsh --profile <name> --dump-config | grep -E 'browserProvider|# == dsh-moli-browser'
+#
+# 不要做的事：
+#   - 不需要（也不要）再把 dsh-builtin-browser 作为组合包装进同一个 profile：
+#     它是本包的依赖，会被自动装进 profile；但它若**同时**也是 bundle，
+#     `browser` / `tool-browser` 两个 id 会被插两次、33 个工具重名挂两遍。
+#     已经装过就移除：dsh plugin --profile <name> remove dsh-builtin-browser
+#   - 若你的 profile 的 cordis.patch.yml 里手写过等价的粘贴（旧版安装方式），先删掉再让本包进 bundles，
+#     否则同样的 insert 会重复。（bundle 与手写 patch 二选一。）
+- insert:
+    - id: browser
+      name: dsh-moli-browser/browser
+      config:
+        browserProvider: cdp-daemon
+
+    - id: tool-browser
+      name: dsh-moli-browser/tool-browser
+
+    - id: browser-moli
+      name: dsh-moli-browser
+      config:
+        cdpUrl: http://127.0.0.1:9333
+
+# 服务器上没有 GUI 库/沙箱，Electron provider 用不了；这里顺手关掉的情况是：
+#   - browser-electron：只有当别的组合包（如 dsh-builtin-browser）插了它才存在；
+#   - playwright-browser：只在装了 dsh-playwright-browser 时存在，它与本包工具重名。
+# 这两个 id 在本包单独安装的环境里不存在，loader 只会打印一条 not found 提示，不影响组合。
+- id: browser-electron
+  disabled: true
+
+- id: playwright-browser
+  disabled: true

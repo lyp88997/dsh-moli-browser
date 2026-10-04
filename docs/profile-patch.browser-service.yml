@@ -1,0 +1,49 @@
+# 手写 patch 路线 —— 只适合「改源码时的临时接线」。
+#
+# 正常安装请用官方命令（一条就装完，见根 README §3.3）：
+#   dsh plugin --profile <name> add <dsh-moli-browser-<v>.tgz 或 Release 资产 URL>
+#
+# 什么时候才用这份手写 patch：
+#   - 你在改本仓库的源码，想让运行中的 profile 直接指向工作树（symlink 而非安装），或
+#   - 你想让本包只当普通依赖、自己控制 patch 内容。
+# 前提：
+#   1) profile 里已经装好接缝组合包 dsh-builtin-browser（它插入 browser / browser-electron / tool-browser 三行）；
+#      走本包的 bundle 路线时**不需要**它（本包自己转出这三行）。
+#   2) 本包能被 profile 解析，例如：
+#        ln -s /home/node/DSH/dsh-moli-browser $DSH_HOME/profiles/<name>/node_modules/dsh-moli-browser
+#      注意：**手写 patch 与 bundle 路线不要同时用**，否则 insert 行会重复。
+#
+# 作用：
+#   1) 注册本仓库的 provider 插件（seam: ctx.browser，providerId = cdp-daemon）
+#   2) seam 选用它（browserProvider: cdp-daemon）
+#   3) 关掉内置 Electron provider（服务器上没有 GUI 库/沙箱，不可用）
+#   4) 关掉 dsh-playwright-browser（它自带 10 个与内置同名的 browser_* 工具，两个 provider 的工具面不能共存）
+#   5) univer 的 Chromium 继续走用户态包装脚本（不受 provider 影响）
+#
+# autoStartCommand 可以省略：插件默认用本包自带的 bin/browsersvc.mjs 自启（v0.4.0 起）。
+# 想固定端口/内核时才写它 —— patch 是整行替换 config，覆盖时要重述 cdpUrl。
+
+- insert:
+    - id: browser-moli
+      name: dsh-moli-browser
+      config:
+        cdpUrl: http://127.0.0.1:9333
+        connectTimeoutMs: 30000
+
+# seam 选用我们的 provider
+- id: browser
+  config:
+    browserProvider: cdp-daemon
+
+# 关掉内置 Electron provider（本机无 GUI 库/无沙箱，不可用）
+- id: browser-electron
+  disabled: true
+
+# 关掉 dsh-playwright-browser，避免与内置 33 个工具重名
+- id: playwright-browser
+  disabled: true
+
+# univer 的 Chromium 仍走用户态包装脚本
+- id: univer
+  config:
+    browserExecutablePath: /home/node/DSH/.browser/chromium-wrapper.sh

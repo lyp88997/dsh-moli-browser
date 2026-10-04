@@ -1,0 +1,87 @@
+{
+  "name": "dsh-moli-browser",
+  "version": "0.1.0",
+  "description": "一个包把 DSH 接上内存极简的 moli 无头浏览器：单例守护进程 + 33 个 browser_* 工具面 + ctx.browser provider（cdp-daemon），另带网页面板（实时画面/日志/窗口外观/可拖动胶囊）与两份随包全局技能（browser、browser-runtime）—— 一条 dsh plugin add 装完即用",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19"
+  },
+  "bin": {
+    "browsersvc": "bin/browsersvc.mjs"
+  },
+  "main": "./plugin/lib/index.js",
+  "exports": {
+    ".": "./plugin/lib/index.js",
+    "./client": "./plugin/client.js",
+    "./browser": "./plugin/shims/browser.js",
+    "./tool-browser": "./plugin/shims/tool-browser.js",
+    "./cordis.patch.yml": "./plugin/cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./plugin/cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lyp88997/dsh-moli-browser.git"
+  },
+  "homepage": "https://github.com/lyp88997/dsh-moli-browser#readme",
+  "bugs": {
+    "url": "https://github.com/lyp88997/dsh-moli-browser/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "browser",
+    "moli",
+    "cdp",
+    "playwright-core",
+    "headless",
+    "browser-automation",
+    "web-panel",
+    "skills",
+    "cdp-daemon"
+  ],
+  "files": [
+    "bin",
+    "src",
+    "plugin",
+    "tools",
+    "docs",
+    "scripts",
+    "README.md",
+    "LICENSE",
+    "skills",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "start": "node bin/browsersvc.mjs start",
+    "stop": "node bin/browsersvc.mjs stop",
+    "status": "node bin/browsersvc.mjs status",
+    "detect": "node bin/browsersvc.mjs detect",
+    "verify": "node scripts/verify-daemon.mjs",
+    "verify:provider": "node scripts/verify-provider.mjs",
+    "verify:bundle": "node scripts/verify-bundle.mjs",
+    "test": "node scripts/verify-daemon.mjs && node scripts/verify-provider.mjs"
+  },
+  "dependencies": {
+    "dsh-builtin-browser": "^0.1.22",
+    "playwright-core": "^1.49.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
