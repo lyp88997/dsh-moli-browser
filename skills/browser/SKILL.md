@@ -1,13 +1,13 @@
 ---
 name: browser
-description: 需要打开网页、读取渲染后的 DOM/文本、点击/填表/多标签操作、跑页面 JS、抓取列表或截图时用 —— 工具面是本机 33 个内置 browser_* 工具（后端为 dsh-moli-browser 的 CDP 浏览器服务：browsersvc 守护进程 + 用户态 chrome-headless-shell）；含 33 工具按用途分组速查、target 三种定位与坐标点击的取舍、标准工作流、上限与 savePath 规则、实测陷阱表
+description: 需要打开网页、读取渲染后的 DOM/文本、点击/填表/多标签操作、跑页面 JS、抓取列表或截图时用 —— 工具面是本机 33 个内置 browser_* 工具（后端为 dsh-moli-browser 的 CDP 浏览器服务：browsersvc 守护进程 + moli 内核）；含 33 工具按用途分组速查、target 三种定位与坐标点击的取舍、标准工作流、上限与 savePath 规则、实测陷阱表
 whenToUse: 需要访问网页、读取渲染后页面内容、与页面交互、跑页面 JS、抓取或截图时
 ---
 
 # browser — 在本机使用浏览器
 
 > 本技能讲**怎么用**；工具报错 / 守护进程坏了 / 要改 provider 配置 / 要看观测日志 → 读姊妹技能 `browser-runtime`。
-> 2026-09-30 实测校正 + 活实例复核（DSH 0.2.0-rc.2 + `dsh-moli-browser` v0.8.2）。**别照抄网上的 Playwright 教程**：这里的 `target` 只认 `css` / `text` / `xpath`，`text=...`、`role=button|Submit` 那类写法在本机不适用。
+> 2026-10-04 实测校正（`dsh-moli-browser` v1.0.1，内核 **moli**）。**别照抄网上的 Playwright 教程**：这里的 `target` 只认 `css` / `text` / `xpath`，`text=...`、`role=button|Submit` 那类写法在本机不适用。
 
 ## 本机形态（先看清，别照抄通用教程）
 
@@ -17,11 +17,11 @@ whenToUse: 需要访问网页、读取渲染后页面内容、与页面交互、
 | provider | 自建包 `dsh-moli-browser`（`providerId=cdp-daemon`），playwright-core `connectOverCDP` 接自建服务 |
 | 服务 | `browsersvc` 守护进程：公开 `127.0.0.1:9333` → 内核 `127.0.0.1:9300`；首次用浏览器时插件用**包内** `bin/browsersvc.mjs` 自动拉起，守护进程崩溃或空闲自杀后还能再自启 |
 | 凭据 | 公开端口要 `Authorization: Bearer <token>`（token 在 `$DSH_HOME/browser-service/service.json`，0600）；插件每次 attach 自动读，**你不需要传** |
-| 内核 | 用户态 `chrome-headless-shell 154.0.8037.57`，必须经包装脚本启动 |
+| 内核 | **moli**（单发动机；探测顺序 `DSH_BROWSER_MOLI` → PATH → 已知安装目录），守护进程自动注入 `LD_LIBRARY_PATH`/`FONTCONFIG_FILE`（`moliEnv`），无需包装脚本 |
 | 显示 / 视口 | headless 永远无窗口（**别试图"看"浏览器本体**）；默认视口 **1920×1080**（0.8.2 起；0.8.1 及以前是 1440×900），可在面板设置里改，服务端夹到 **640×360 – 3840×2160** |
 | 会话模型 | 一个 DSH 任务 = 一个 session（隔离 BrowserContext，cookie 互不可见）；session 内可多 tab（`t1`/`t2`…），单会话默认最多 **5** 个 |
 | 落盘 | 截图/下载的 `savePath` 必须**绝对路径、不得覆盖已有文件、且落在 `downloadDir` 内**；未配 `downloadDir` 时默认＝系统 Downloads（`XDG_DOWNLOAD_DIR` → `Downloads`/`下载`/`下載` → `~/Downloads`，首次写入时建目录），所以 `/tmp/x.png` 默认被拒（`BROWSER_SCREENSHOT_BLOCKED` / `BROWSER_DOWNLOAD_BLOCKED`）；要写进工作区必须先显式配 `downloadDir`。不传 `savePath` 只回 base64 |
-| 沙箱 | `--no-sandbox`（容器 seccomp 下 Chromium 沙箱起不来）⇒ 页面等于本进程权限，**只访问可信站点** |
+| 沙箱 | moli **不使用 Chromium 沙箱模型**，页面等于本进程权限 ⇒ **只访问可信站点** |
 
 ## 33 个工具速查（按用途分组）
 
@@ -49,7 +49,8 @@ whenToUse: 需要访问网页、读取渲染后页面内容、与页面交互、
 
 | 控件 | 工具 |
 | --- | --- |
-| 文本框 / 文本域 / `contenteditable` | `browser_set_value`（内部 `locator.fill`，会更新框架状态） |
+| 文本框 / 文本域 | `browser_set_value`（内部 `locator.fill`，会更新框架状态） |
+| `contenteditable` 富文本区 | `browser_set_value`（内部直接注入 DOM 赋值 + 派发 `input` 事件，读回值确认） |
 | 想模拟真人逐字输入（触发键盘事件） | `browser_type{text,target}` |
 | 复选框 / 单选 | `browser_check{target,checked}`（也可 `set_value`） |
 | `<select>` | `browser_select{target,optionValue\|optionText\|optionIndex}`（也可 `set_value` 传选项值/文本） |

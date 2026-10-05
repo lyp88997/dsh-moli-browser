@@ -1,6 +1,6 @@
 {
   "name": "dsh-moli-browser",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "一个包把 DSH 接上内存极简的 moli 无头浏览器：单例守护进程 + 33 个 browser_* 工具面 + ctx.browser provider（cdp-daemon），另带网页面板（实时画面/日志/窗口外观/可拖动胶囊）与两份随包全局技能（browser、browser-runtime）—— 一条 dsh plugin add 装完即用",
   "type": "module",
   "license": "MIT",

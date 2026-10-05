@@ -3,10 +3,10 @@
 四条脚本**零依赖**（只用 Node 内置的 `fetch` / `WebSocket` / `http` 与真实 `browsersvc` + 本地站点；`verify-matrix.mjs` 的 `--smoke` 需要能解析外网的 `example.com`）：
 
 ```bash
-node scripts/verify-daemon.mjs      # M1 守护进程 + CLI 防御：35/35
-node scripts/verify-provider.mjs    # M2 provider + P7 分辨率 + 随包技能提供者：125 通过，0 失败
+node scripts/verify-daemon.mjs      # M1 守护进程 + CLI 防御：38/38（含新增题⑤⑥）
+node scripts/verify-provider.mjs    # M2 provider + P7 分辨率 + 随包技能提供者：130 通过，0 失败（含新增题①②③）
 node scripts/verify-bundle.mjs      # 组合包安装（官方 dsh plugin 流程）：75/75
-node scripts/verify-data.mjs        # P3 观测面 + P4/P5 实时窗口 + P6 清理跳转 + P7 分辨率/偏移：86 通过，0 失败
+node scripts/verify-data.mjs        # P3 观测面 + P4/P5 实时窗口 + P6 清理跳转 + P7 分辨率/偏移：88 通过，0 失败（含新增题④）
 node scripts/verify-matrix.mjs --dsh <bin> --dsh <bin> --smoke   # DSH 版本矩阵：4 个宿主版本 × 12 项
 ```
 
@@ -22,7 +22,7 @@ node scripts/verify-matrix.mjs --dsh <bin> --dsh <bin> --smoke   # DSH 版本矩
 
 **P6 日志清理与无会话跳转（同脚本内 11 项）** —— 仍然用假 provider 打真路由：一次 `registerPanel` 挂上**五条**路由（多了 `POST /browser-service/logs`）；无会话时 `live.json` 回 200 且 reason 是可操作提示；此时地址栏发 `goto` 会先 `provider.open('面板地址栏')` 再 `openUrl()`（断言两个调用与回包 `opened:true`）；空网址 400、非跳转动作 409；清理侧先写 6 条 `network` 再 `trim keep:2`（只留最近 2 条）、`clear` 一次清空三类、未知类型 400、`GET` 405、跨站 403、非回环 403、`dispose` 后一起摘掉。**没覆盖到的**：客户端窗口里的「清理」两次确认、胶囊四角、错误条渲染这些 DOM 行为——它们在开发用的预览工装里人工跑过（见 `CHANGELOG.md` 的 P6 段），不进自动化。
 
-**P7 分辨率写路由（同脚本内 9 项）** —— 同样用假 provider 打真路由：一次 `registerPanel` 现在挂**六条**路由（多了 `POST /browser-service/viewport`）；`panel.json.service.viewport` 回读当前分辨率；`POST` 合法宽高 → 200、回包 `viewport` 与 `applied`、且**真页面**（本地站点的真 chromium）的视口真的变成新尺寸；`{width:'x'}` → 400（不拿非法值去改页面）；`GET` 405；跨站 403；非回环 403；无 provider 503；`dispose` 后六条一起摘掉；再补一条**画面糊的回归断言**：`live.jpg?quality=85&max=1280`（**不带 `maxh`**）时高度上限必须沿用当前值 600，而不是被 `Number(null) === 0` 塌到下限 240（这一条正是「分辨率调大了画面还是糊」的根因）。**没覆盖到的**：设置页的「分辨率」分段与结果小字、胶囊自定义偏移后的落位、清理成功/失败的顶部提示条——这些 DOM 行为同样只在预览工装里人工跑过（见 `CHANGELOG.md` 的 P7 段）。
+**P7 分辨率写路由（同脚本内 9 项）** —— 同样用假 provider 打真路由：一次 `registerPanel` 现在挂**六条**路由（多了 `POST /browser-service/viewport`）；`panel.json.service.viewport` 回读当前分辨率；`POST` 合法宽高 → 200、回包 `viewport` 与 `applied`、且**真页面**（本地站点，moli 内核真渲染）的视口真的变成新尺寸；`{width:'x'}` → 400（不拿非法值去改页面）；`GET` 405；跨站 403；非回环 403；无 provider 503；`dispose` 后六条一起摘掉；再补一条**画面糊的回归断言**：`live.jpg?quality=85&max=1280`（**不带 `maxh`**）时高度上限必须沿用当前值 600，而不是被 `Number(null) === 0` 塌到下限 240（这一条正是「分辨率调大了画面还是糊」的根因）。**没覆盖到的**：设置页的「分辨率」分段与结果小字、胶囊自定义偏移后的落位、清理成功/失败的顶部提示条——这些 DOM 行为同样只在预览工装里人工跑过（见 `CHANGELOG.md` 的 P7 段）。
 
 **P8 窗口外观与设置保存（只在客户端半边）** —— 这一批没有新增路由，全部落在 `plugin/client.js`：`verify-bundle.mjs` 的客户端探针把两个新纯函数真跑一遍（5c 段 17 → **19** 项）——`appearanceStyle(settings, kind)` 产出的 CSS 变量（自定义色 + 60% + 液态玻璃 ⇒ `--bsp-rim` 为自定义色、`--bsp-alpha` 60%、`--bsp-blur` 18px、`--bsp-sat` 165%、`--bsp-glow` 1 且阴影含 `inset` 高光，内部分区的 `--bsp-card`/`--bsp-surface` 也按 60% 混出、`--bsp-divider`＝`color-mix(<色> 45%, transparent)`；无边框 + 100% + 关 ⇒ 透明边框、`blur(0px)`、无高光，分隔线回落宿主 `border-l1`）与 `borderOf` 的颜色规整（`'javascript:alert(1)'` 回落 `theme`、`'#AABBCC'` 归一成 `'#aabbcc'`、`cardAlpha:0` 夹到 20、`glass:123` 回落 `frost`）。**没覆盖到的**：设置页的「窗口外观」三个控件、吸顶保存栏的三态文案（未保存琥珀 / 保存成功绿字 / 写本地存储失败红字）、草稿不落盘、取色器自定色即时生效、胶囊跟随外观——这些 DOM 行为在预览工装里用真浏览器逐项跑过（见 `CHANGELOG.md` 的 P8 段）
 

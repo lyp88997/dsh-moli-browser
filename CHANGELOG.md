@@ -3,7 +3,20 @@
 本文件记录每个版本的变更与**真实缺陷编号**（F = 代码审查/上线验证发现的缺陷，P = 专项（P1 资源/性能 0.5.0、P2 DSH 版本适配 0.5.1、P3 可观测性与交互 0.6.0、P4 实时交互网页窗口 0.7.0、P5 窗口与入口重做 0.8.0、P6 界面美化与体验修补 0.8.1、P7 分辨率与胶囊坐标可调、清理可见化、画面清晰度修复 0.8.1、P8 窗口外观可自定义与设置显式保存 0.8.1、P9 胶囊可拖动与「自由位置」 0.8.3、P10 取帧切回自动续帧与「最大边」默认 1920 0.8.3、S 随包全局技能 0.8.1、S2 技能改「系统内置」提供者 0.8.2、G 窗口几何：去黑边/让开顶栏/默认居中/按真实高度居中 0.8.2），B = 按官方打包文档核对发现的问题，U = v0.4.0 合并交付物的改动，D = 数据/行为对齐，P1 见 v0.5.0，F26 见 v0.4.0）。
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-验收计数随版本推进：`verify-daemon` 13 → 26 → 31 → 32 → **35**，`verify-provider` 67 → 77 → 83 → 86 → 88 → 95 → 110 → 116 → 117 → **125**，`verify-bundle` 16 → 23 → 33 → 40 → 41 → 44 → 46 → 50 → 52 → 61 → 65 → 70 → **75**，`verify-data` 45 → 61 → 66 → 77 → 85 → **86**，`verify-matrix` 4 个宿主版本 × 12 项。
+验收计数随版本推进：`verify-daemon` 13 → 26 → 31 → 32 → 35 → **38**，`verify-provider` 67 → 77 → 83 → 86 → 88 → 95 → 110 → 116 → 117 → 125 → **130**，`verify-bundle` 16 → 23 → 33 → 40 → 41 → 44 → 46 → 50 → 52 → 61 → 65 → 70 → 75 → **75**，`verify-data` 45 → 61 → 66 → 77 → 85 → 86 → **88**，`verify-matrix` 4 个宿主版本 × 12 项。
+
+## [1.0.1] — 2026-10-05
+
+**主题：方案 A 单发动机重写首版 —— 引擎从 Chrome 换成 moli，窗口交互与面板路由原样不动。** 新仓库从前身 `dsh-browser-service`（0.8.3 冻结）分出独立演进，包名 `dsh-moli-browser`、插件 id `browser-moli`、守护进程/CLI 仍叫 `browsersvc`、面板仍是 `/browser-service/*` 六条路由。
+
+- **内核单换 moli**（moli v1.1.12，sha256 `b610d852…`，x86_64 glibc）：`moli serve --host 127.0.0.1 --port --layout --resource [--screencast-interval-ms] --profile-dir` 直连；`moliEnv()` 自动注入 `LD_LIBRARY_PATH` 与 `FONTCONFIG_FILE`；无 Chromium 沙箱参数。
+- **stop 身份校验改双认**：内核命令行含登记监听端口（`--remote-debugging-port=N` 或 `--port N`）才认，防误杀同名进程。
+- **contenteditable 赋值改 DOM 直注入**；**新增 `--screencast-interval-ms`（默认 200，实测滚动最顺滑档）**（§5.5 决策记录）。
+- **`plugin/client.js` 冻结不动（md5 `c42d51c0e8a2f20fe3ad1f582019ae7f`）**，唯一改动是 `__ModuleLoader__.load` 的 `id`：`dsh-browser-service` → `dsh-moli-browser` —— 平台硬约束「client id = 包名」（其它包同规则，`verify-bundle` 有断言）；交互代码（几何/拖动/取帧/设置）与 STORAGE_KEY/STYLE_ID 一字未改。
+- **验收四套件全绿：`verify-daemon` 38 + `verify-provider` 130 + `verify-data` 88 + `verify-bundle` 75 = 331，0 失败**（计数见文件头）。新增 6 项实测：①CJK 截图笔画（中文不方块）②JPEG 魔数 ③13 标签并发 ④screencast 滚动/导航出帧 ⑤守护进程 VmRSS ≤ 30MB ⑥profile cookie 跨重启持久。
+- **GUI 回归（§8）**：舞台「点链接进页」经用户真实点击实测通过；面板跳转/推流/坐标链路（`mapPoint → POST /browser-service/live → viewFor(liveTarget()) → view.input()`）已逐段验证；已知宿主侧现象（旧标签页 React root 楔死需刷新、同服务多会话共用时 liveTarget 漂移）与本包引擎无关，另行处理。
+- **不变量**：33 个 `browser_*` 工具面、`dsh-builtin-browser@0.1.22` 接缝、六条 `/browser-service/*` 路由、两份随包技能（browser、browser-runtime）与内置技能提供者注册均与 0.8.3 一致。
+- 红线遵守：不在 43.165.181.72 重编译；旧仓 `dsh-browser-service` 保持 0.8.3 冻结（HEAD `e4be53f`）不改动。
 
 ## [0.8.3] — 2026-10-04
 

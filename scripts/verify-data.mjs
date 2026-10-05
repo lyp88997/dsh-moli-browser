@@ -400,6 +400,55 @@ try {
   await stale.arrayBuffer();
   check('没有新帧时回 204（客户端不会收到重复画面）', stale.status === 204, `status=${stale.status}`);
 
+  // 新增题④：真实推流出帧规则 —— 与实时窗口同一开法（playwright CDP 会话，同 liveview.mjs
+  // 的 #session），对真实 moli 断言「滚动出新帧、导航出新帧」。不断言动画/停帧（太脆），
+  // 只断言会动就有帧。注意：裸 WebSocket attach 的会话 moli 只回首帧（实测 1→1→1），
+  // 面板/产品走的 playwright 会话才持续出帧（实测 1→2→3），所以这里必须用产品同款开法。
+  {
+    const st = JSON.parse(readFileSync(join(root, 'service.json'), 'utf8'));
+    const conn = await chromium.connectOverCDP(`http://127.0.0.1:${st.port}`, { timeout: 15_000, headers: { authorization: `Bearer ${st.token}` } });
+    let frames = 0;
+    let page = null;
+    try {
+      const context = conn.contexts()[0];
+      page = await context.newPage();
+      await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+      // 本地站首页很矮（不可滚）：先垫高页面，否则 wheel 无位移、没有重绘就没有新帧。
+      await page.evaluate(() => {
+        const d = document.createElement('div');
+        d.style.height = '4000px';
+        document.body.appendChild(d);
+      });
+      await sleep(600);
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Page.enable');
+      cdp.on('Page.screencastFrame', (event) => {
+        frames += 1;
+        cdp.send('Page.screencastFrameAck', { sessionId: event.sessionId }).catch(() => {});
+      });
+      await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 50, maxWidth: 800, maxHeight: 600, everyNthFrame: 1 });
+      await sleep(1500);
+      const base = frames;
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 400, y: 300, deltaX: 0, deltaY: 600 });
+      await sleep(600);
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: 400, y: 300, deltaX: 0, deltaY: 600 });
+      await sleep(900);
+      const afterScroll = frames;
+      await page.goto(`${BASE}/next`, { waitUntil: 'domcontentloaded' });
+      await sleep(1500);
+      const afterNav = frames;
+      check('推流：滚动出新帧（新增题④）', afterScroll > base, `frames ${base} → ${afterScroll}`);
+      check('推流：导航出新帧（新增题④）', afterNav > afterScroll, `frames ${afterScroll} → ${afterNav}`);
+      await cdp.send('Page.stopScreencast').catch(() => {});
+    } catch (e) {
+      check('推流出帧（新增题④）', false, e.message);
+    } finally {
+      // 只关自己开的页；不调 browser.close()（connectOverCDP 的 close 会清浏览器全部
+      // context，可能连带关掉套件其它现场页），连接随测试进程退出自然断开。
+      await page?.close().catch(() => {});
+    }
+  }
+
   // ── P5：设置区的画质/最大边真的作用到取帧上，并把生效值读回来 ──────────────
   console.log('\nP5 实时窗口：取帧参数与设置区');
   const tuned = await fetch(`${liveBase}${LIVE_IMAGE_PATH}?since=0&quality=85&max=800&maxh=600`);

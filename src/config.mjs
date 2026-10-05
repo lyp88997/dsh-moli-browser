@@ -13,6 +13,9 @@ export const DEFAULTS = {
   restartWindowMs: 60_000,
   startTimeoutMs: 25_000,
   internalPortBase: 9300,
+  // moli 推流帧间隔（决策点 3 实测拍板）：200ms 滚动 1.5s 出 6 帧；moli 原默认 1000ms 只出
+  // 2 帧；100ms 无额外收益；四档静止时同样零流量。
+  screencastIntervalMs: 200,
 };
 
 /** 数值配置的合法区间：越界或非整数一律拒绝，避免 NaN 静默打穿定时器与重启预算。 */
@@ -131,7 +134,8 @@ export function resolveConfig(cli = {}, env = process.env) {
     userDataDir: cli.userDataDir ?? file.userDataDir ?? join(root, 'profile'),
     screencastIntervalMs: num(cli.screencastIntervalMs, 'screencastIntervalMs')
       ?? num(env.DSH_BROWSER_SCREENCAST_INTERVAL_MS, 'screencastIntervalMs')
-      ?? num(file.screencastIntervalMs, 'screencastIntervalMs'),
+      ?? num(file.screencastIntervalMs, 'screencastIntervalMs')
+      ?? DEFAULTS.screencastIntervalMs,
     kernel: null,
     kernelKind: null,
   };

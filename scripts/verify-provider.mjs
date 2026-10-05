@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 import { createProvider, defaultAutoStartCommand, defaultDownloadDir } from '../plugin/lib/provider.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -40,6 +41,73 @@ async function expectCode(name, code, fn) {
     check(name, false, '未抛出错误');
   } catch (error) {
     check(name, error?.code === code, `code=${error?.code} message=${error?.message}`);
+  }
+}
+
+/**
+ * 解 PNG（8bit 非隔行，colorType 2/6）统计「近黑像素」数——用于中文渲染断言：
+ * 字体配置没注入时中文整块不出笔画，截图近白，dark ≈ 0。零依赖（node:zlib 解 IDAT）。
+ */
+function pngDarkPixels(buf) {
+  try {
+    if (buf.readUInt32BE(0) !== 0x89504e47) return -1;
+    let off = 8;
+    let w = 0;
+    let h = 0;
+    let bitDepth = 0;
+    let colorType = 0;
+    const idat = [];
+    while (off + 8 <= buf.length) {
+      const len = buf.readUInt32BE(off);
+      const type = buf.toString('ascii', off + 4, off + 8);
+      const data = buf.subarray(off + 8, off + 8 + len);
+      if (type === 'IHDR') {
+        w = data.readUInt32BE(0);
+        h = data.readUInt32BE(4);
+        bitDepth = data[8];
+        colorType = data[9];
+        if (data[12] !== 0) return -2; // 隔行不处理
+      } else if (type === 'IDAT') {
+        idat.push(data);
+      } else if (type === 'IEND') {
+        break;
+      }
+      off += 12 + len;
+    }
+    const bpp = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+    if (!w || !h || bitDepth !== 8 || !bpp || idat.length === 0) return -3;
+    const raw = inflateSync(Buffer.concat(idat));
+    const stride = w * bpp;
+    const paeth = (a, b, c) => {
+      const p = a + b - c;
+      const pa = Math.abs(p - a);
+      const pb = Math.abs(p - b);
+      const pc = Math.abs(p - c);
+      return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+    };
+    let dark = 0;
+    let prev = Buffer.alloc(stride);
+    for (let y = 0; y < h; y += 1) {
+      const filter = raw[y * (stride + 1)];
+      const line = Buffer.from(raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)));
+      for (let i = 0; i < stride; i += 1) {
+        const a = i >= bpp ? line[i - bpp] : 0;
+        const b = prev[i];
+        const c = i >= bpp ? prev[i - bpp] : 0;
+        if (filter === 1) line[i] = (line[i] + a) & 255;
+        else if (filter === 2) line[i] = (line[i] + b) & 255;
+        else if (filter === 3) line[i] = (line[i] + Math.floor((a + b) / 2)) & 255;
+        else if (filter === 4) line[i] = (line[i] + paeth(a, b, c)) & 255;
+      }
+      for (let x = 0; x < w; x += 1) {
+        const i = x * bpp;
+        if (line[i] < 100 && line[i + 1] < 100 && line[i + 2] < 100) dark += 1;
+      }
+      prev = line;
+    }
+    return dark;
+  } catch {
+    return -4;
   }
 }
 
@@ -275,6 +343,15 @@ try {
   check('screenshot maxWidth/maxHeight 等比缩小', raw.readUInt32BE(16) <= 720 && raw.readUInt32BE(20) <= 450, `${raw.readUInt32BE(16)}x${raw.readUInt32BE(20)}`);
   const full = await provider.screenshot(session, { format: 'jpeg', fullPage: true, quality: 60 });
   check('screenshot fullPage/jpeg 可用', String(full.dataUrl).startsWith('data:image/jpeg;base64,'));
+  const jpg = Buffer.from(String(full.dataUrl).split(',')[1], 'base64');
+  check('JPEG 魔数 FFD8 且是真图像（新增题②）', jpg[0] === 0xff && jpg[1] === 0xd8 && jpg.length > 500, `${jpg.subarray(0, 2).toString('hex')} ${jpg.length}B`);
+  // 新增题①：中文渲染 —— 页面压一块大号黑字中文（fixed 覆盖层，不随滚动），截图解像素：
+  // 字体/字体配置没注入时中文不出笔画、整屏近白（dark≈0），这里必须有真实笔画。
+  await provider.execute(session, { script: `document.body.insertAdjacentHTML('beforeend', '<div id="cjkbig" style="position:fixed;top:0;left:0;z-index:9999;background:#fff;color:#000;font-size:64px;padding:8px 12px">中文渲染测试字形</div>'); 'ok'` });
+  const cjkShot = await provider.screenshot(session, { format: 'png' });
+  const cjkDark = pngDarkPixels(Buffer.from(String(cjkShot.dataUrl).split(',')[1], 'base64'));
+  check('中文页面截图有真实笔画（新增题①，字体环境生效）', cjkDark > 500, `dark=${cjkDark}`);
+  await provider.execute(session, { script: `document.getElementById('cjkbig')?.remove(); 'ok'` });
   const downloaded = await provider.download(session, { url: `${BASE}/next`, savePath: join(root, 'page.html') });
   check('download 落盘', existsSync(downloaded.path) && statSync(downloaded.path).size > 100, downloaded.path);
 
@@ -503,6 +580,47 @@ try {
     check(`maxTabs 段未抛异常：${error?.message}`, false, error?.stack?.split('\n').slice(0, 2).join(' | '));
   } finally {
     await capProvider.dispose();
+  }
+}
+
+// 新增题③：13 页签 —— 把上限提到 13，一口气开满 13 个标签（moli 多目标能力），
+// 每个页签都能列出来、交替 URL 互不串，再关一个确认槽位释放。
+{
+  console.log('\n新增题③ 13 页签');
+  const tabsProvider = createProvider({
+    chromium: (await import('playwright-core')).chromium,
+    config: {
+      providerId: 'cdp-daemon',
+      cdpUrl: `http://127.0.0.1:${PORT}`,
+      connectTimeoutMs: 10_000,
+      actionTimeoutMs: 15_000,
+      navigationTimeoutMs: 15_000,
+      lookupTimeoutMs: 5_000,
+      viewportWidth: 800,
+      viewportHeight: 600,
+      maxTabs: 13,
+      downloadDir: root,
+    },
+  });
+  try {
+    const s13 = await tabsProvider.open('tabs13');
+    // 首签先导航掉 about:blank，保证 13 个签的 URL 都是真实页面（读回校验的前提）。
+    await tabsProvider.openUrl(s13, { url: `${BASE}/` });
+    for (let i = 0; i < 12; i += 1) {
+      await tabsProvider.openUrl(s13, { url: i % 2 === 0 ? `${BASE}/` : `${BASE}/next`, newTab: true });
+    }
+    const list13 = await tabsProvider.listTabs(s13);
+    check('13 页签全部打开（新增题③）', list13.length === 13, `tabs=${list13.length}`);
+    const urls13 = new Set(list13.map((t) => String(t.url ?? '')));
+    check('13 页签 URL 可读且覆盖两种页面', urls13.size >= 1 && [...urls13].every((u) => u === `${BASE}/` || u === `${BASE}/next`), [...urls13].join(' , ').slice(0, 160));
+    const last13 = list13[list13.length - 1];
+    await tabsProvider.closeTab(s13, last13.id);
+    check('关掉 1 个后剩 12 个（槽位正常释放）', (await tabsProvider.listTabs(s13)).length === 12, `tabs=${(await tabsProvider.listTabs(s13)).length}`);
+    await tabsProvider.close(s13);
+  } catch (error) {
+    check(`13 页签段未抛异常：${error?.message}`, false, error?.stack?.split('\n').slice(0, 2).join(' | '));
+  } finally {
+    await tabsProvider.dispose();
   }
 }
 

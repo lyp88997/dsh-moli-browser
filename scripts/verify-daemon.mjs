@@ -20,7 +20,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const BIN = fileURLToPath(new URL('../bin/browsersvc.mjs', import.meta.url));
-const IDLE_MS = 5000;
+// F27 裸 socket 段有 5.6s 活动空洞（800+800+4000），且杀死时机受 1s tick 相位影响：
+// 5000 会与 F20 的 ws 连接赛跑（已实测 service.log shutdown: idle 抢在升级前）。
+// 12000 + tick ≤13s，仍在「空闲后自动退出」20s 预算内。
+const IDLE_MS = 12000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const results = [];
 const check = (label, ok, detail = '') => {
@@ -29,9 +32,9 @@ const check = (label, ok, detail = '') => {
 };
 
 const guard = setTimeout(() => {
-  console.error('\n超时（120s），提前退出');
+  console.error('\n超时（180s），提前退出');
   process.exit(1);
-}, 120_000);
+}, 180_000);
 guard.unref?.();
 
 async function probe(port, timeoutMs = 2000, token) {
@@ -190,6 +193,23 @@ check('守护进程启动', true, `公开端口 ${info.port} → 内部端口 ${
 const port = info.port;
 const token = info.token;
 const statePath = join(root, 'service.json');
+
+// 新增题⑤：moli 空闲内存上限 —— 读 /proc/<browserPid>/status VmRSS，硬指标 ≤30MB。
+// 放在任何开页动作之前（刚就绪、无页面）＝真正的空闲基线。
+{
+  await sleep(600);
+  let vmText = '';
+  let vmrss = NaN;
+  try {
+    const st = JSON.parse(readFileSync(statePath, 'utf8'));
+    vmText = readFileSync(`/proc/${st.browserPid}/status`, 'utf8');
+    vmrss = Number(/VmRSS:\s+(\d+) kB/.exec(vmText)?.[1]);
+  } catch (e) {
+    vmText = `读取失败: ${e.message}`;
+  }
+  check('moli 空闲 VmRSS ≤30MB（新增题⑤）', Number.isFinite(vmrss) && vmrss > 0 && vmrss <= 30 * 1024,
+    Number.isFinite(vmrss) ? `${(vmrss / 1024).toFixed(1)}MB (${vmrss}kB)` : vmText.slice(0, 120));
+}
 
 // ── 2b. 公开端口的凭据门与路径白名单（F7） ────────────────────────────────
 check('状态文件含 token 且不对外开放', typeof token === 'string' && token.length > 0 && (statSync(statePath).mode & 0o077) === 0, `mode=${(statSync(statePath).mode & 0o777).toString(8)}`);
@@ -424,6 +444,53 @@ check('restart 真的停旧起新（F23）', restartedCli.code === 0 && restarte
 check('restart 后 token 换新', typeof tokenAfterRestart === 'string' && tokenAfterRestart !== tokenBeforeRestart, `${String(tokenBeforeRestart).slice(0, 8)} → ${String(tokenAfterRestart).slice(0, 8)}`);
 const stoppedRestart = await runCli(['stop', `--root=${rootRestart}`], 60_000);
 check('restart 后的实例可正常 stop', stoppedRestart.code === 0, `code=${stoppedRestart.code}`);
+
+// 新增题⑥：登录状态跨重启保持（§5.6 决策树）—— 默认上下文（profile 持久区）写 cookie →
+// stop → start → 同一 origin 还能读到。这正是旧翻译壳丢掉 profile 目录时做不到的事。
+{
+  const rootPersist = mkdtempSync(join(tmpdir(), 'browsersvc-verify-persist-'));
+  extraRoots.push(rootPersist);
+  const persistStart = await runCli(['start', `--root=${rootPersist}`, '--port=0', '--idle-ms=120000'], 60_000);
+  check('登录态前置：实例可启动', persistStart.code === 0, `code=${persistStart.code} ${persistStart.stdout.slice(0, 120)}`);
+  let persistDetail = '';
+  try {
+    const st1 = JSON.parse(readFileSync(join(rootPersist, 'service.json'), 'utf8'));
+    const v1 = await probe(st1.port, 5000, st1.token);
+    const cdp1 = connectCdp(v1.webSocketDebuggerUrl);
+    await cdp1.ready;
+    const { targetId } = await cdp1.send('Target.createTarget', { url: origin });
+    const { sessionId } = await cdp1.send('Target.attachToTarget', { targetId, flatten: true });
+    for (let i = 0; i < 60; i += 1) {
+      if ((await evalIn(cdp1, sessionId, 'document.readyState')) === 'complete') break;
+      await sleep(100);
+    }
+    const setRes = await cdp1.send('Network.setCookie', { url: origin, name: 'dshPersist', value: 'ok' }, sessionId);
+    const wrote = setRes?.success === true;
+    await cdp1.send('Target.closeTarget', { targetId });
+    cdp1.close();
+    await runCli(['stop', `--root=${rootPersist}`], 60_000);
+    const restartStart = await runCli(['start', `--root=${rootPersist}`, '--port=0', '--idle-ms=120000'], 60_000);
+    const st2 = JSON.parse(readFileSync(join(rootPersist, 'service.json'), 'utf8'));
+    const v2 = await probe(st2.port, 5000, st2.token);
+    const cdp2 = connectCdp(v2.webSocketDebuggerUrl);
+    await cdp2.ready;
+    const t2 = await cdp2.send('Target.createTarget', { url: origin });
+    const s2 = await cdp2.send('Target.attachToTarget', { targetId: t2.targetId, flatten: true });
+    for (let i = 0; i < 60; i += 1) {
+      if ((await evalIn(cdp2, s2.sessionId, 'document.readyState')) === 'complete') break;
+      await sleep(100);
+    }
+    const after = await evalIn(cdp2, s2.sessionId, 'document.cookie');
+    await cdp2.send('Target.closeTarget', { targetId: t2.targetId });
+    cdp2.close();
+    persistDetail = `set=${wrote} restart=${restartStart.code === 0} cookie="${after}"`;
+    check('重启后默认上下文 cookie 仍在（新增题⑥，-P/--profile-dir 持久登录态）',
+      wrote && restartStart.code === 0 && String(after).includes('dshPersist=ok'), persistDetail);
+  } catch (e) {
+    check('重启后默认上下文 cookie 仍在（新增题⑥，-P/--profile-dir 持久登录态）', false, `${persistDetail} ${e.message}`);
+  }
+  await runCli(['stop', `--root=${rootPersist}`], 60_000);
+}
 
 // ── 汇总 ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 await new Promise((r) => originServer.close(r));

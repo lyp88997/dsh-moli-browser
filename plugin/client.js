@@ -28,7 +28,10 @@
  * （position: fixed），否则会盖住整个界面。
  */
 window.__ModuleLoader__.load({
-  id: 'dsh-browser-service',
+  // 平台硬约束（2026-10 GUI 实测）：注册 id 必须等于包名，否则 web 启动报
+  // 「import failed」、网页面板打不开。改名时注册 id 同步换掉；STORAGE_KEY /
+  // STYLE_ID / 面板 DOM id 等交互记忆键保持历史名不动（老用户设置不丢）。
+  id: 'dsh-moli-browser',
   factory: (require) => {
     const exports = {};
     const React = require('react');

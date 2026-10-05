@@ -157,6 +157,13 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
     // P7：当前生效的浏览器窗口分辨率（面板可改，新建上下文与已开页面都用它）。
     #viewport = { ...initialViewport };
 
+    // 卡死恢复专用通道：健康期为每个标签缓存一条 CDP 会话。moli 单进程实测——页面 JS
+    // 占死时向该 target 发 attach 会挂起，且挂起的 attach 会锁死整条 CDP 管道（连存量
+    // 会话上的命令都不再回应），所以 #terminate 只能走这条健康期建好的存量会话。
+    #killCdp = new WeakMap();
+    #killGen = new WeakMap();
+    #killCloseHooked = new WeakSet();
+
     /** 廉价可用性：只反映依赖是否就绪，不做任何网络探测（daemon 未起时由 open() 报错）。 */
     available() {
       return Boolean(chromium);
@@ -355,7 +362,40 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
       const tabId = `t${(session.tabSeq += 1)}`;
       session.tabs.set(tabId, page);
       this.#instrument(page, session.id, tabId);
+      this.#cacheKillCdp(page);
       return tabId;
+    }
+
+    /**
+     * 健康期建好卡死恢复用的 CDP 通道，并在每次【导航后】重建。
+     * moli 实测（tmexp 判别实验 6/6 复现）：导航【前】建立的会话在导航后命令永无响应
+     * （会话被绑到旧 renderer），#terminate 会永远等不到回包；导航【后】新建的会话
+     * 实测可用（13/13）。gen 代际防「两次重建的回包乱序」，旧会话显式 detach 防漏（F8）。
+     */
+    #cacheKillCdp(page) {
+      const prev = this.#killCdp.get(page);
+      if (prev) {
+        this.#killCdp.delete(page);
+        prev.detach().catch(() => {});
+      }
+      const gen = (this.#killGen.get(page) ?? 0) + 1;
+      this.#killGen.set(page, gen);
+      page.context().newCDPSession(page).then((cdp) => {
+        // 挂上期间又发生了导航/重建：丢弃自己，保证表里永远是最新会话。
+        if (page.isClosed() || this.#killGen.get(page) !== gen) {
+          cdp.detach().catch(() => {});
+          return;
+        }
+        this.#killCdp.set(page, cdp);
+      }).catch(() => {});
+      if (!this.#killCloseHooked.has(page)) {
+        this.#killCloseHooked.add(page);
+        page.on('close', () => {
+          const cdp = this.#killCdp.get(page);
+          this.#killCdp.delete(page);
+          if (cdp) cdp.detach().catch(() => {});
+        });
+      }
     }
 
     /** P3：console / 网络捕获开关（缺省开，只有显式配 false 才关）。 */
@@ -468,28 +508,44 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
       }
     }
 
-    /** 用 CDP 尝试打断页面里跑飞的脚本（只发不等：线程真卡住时该命令也不会回应）。 */
+    /**
+     * 用 CDP 尝试打断页面里跑飞的脚本（只发不等：线程真卡住时该命令也不会回应）。
+     * 必须走健康期缓存的存量会话——卡死时现场 attach 会挂起，且挂起的 attach 会锁死
+     * 整条 CDP 管道（moli 单进程实测：attach 超时后连存量会话上的命令都不再回应）。
+     */
     #terminate(page) {
-      void page
-        .context()
-        .newCDPSession(page)
-        // 每个 CDPSession 都要显式 detach，否则卡死恢复每触发一次就漏一个会话（F8）。
-        .then((cdp) => cdp.send('Runtime.terminateExecution').catch(() => {}).finally(() => cdp.detach().catch(() => {})))
-        .catch(() => {});
+      const cdp = this.#killCdp.get(page);
+      if (cdp) void cdp.send('Runtime.terminateExecution').catch(() => {});
     }
 
     /**
-     * 页面被 `while(true)` 这类脚本占死 JS 线程时，同页后续调用会一直超时；
-     * 实测同 context 里新建标签页、关闭卡死页都仍然可用，所以按需重建该 tab 并回到原 url。
-     * 先用短探针确认是否真的卡死，避免慢请求超时也误伤标签页。
+     * 页面被 `while(true)` 这类脚本占死 JS 线程时，同页后续调用会一直超时。
+     * 恢复顺序（moli 单进程，每步皆有实测依据）：
+     *  1. 先用存量会话 terminate 打断循环（实测 10ms 生效）——循环不死就动页面，
+     *     任何 attach/newPage 都会挂起并毒化整条管道；
+     *  2. 轮询确认 JS 线程已松开（最多 1.2s），确认后才 close + 重建标签并回到原 url；
+     *  3. 打断不成功就原样返回（不碰页面），execute 走原超时文案。
      */
     async #recoverIfWedged(session, page) {
       this.#terminate(page);
-      const alive = await Promise.race([
-        page.evaluate('1').then(() => true).catch(() => true),
-        new Promise((resolve) => setTimeout(() => resolve(false), 400)),
-      ]);
-      if (alive) return false;
+      const cdp = this.#killCdp.get(page);
+      let released = false;
+      if (cdp) {
+        // terminate 偶发被 moli 单进程排队（独立复刻 13/13 过、套件里却随机挂），带重发窗口：
+        // 每 700ms 重发一次并轮询，4s 内线程松开即继续重建；始终不松就不碰页面，按原超时返回。
+        const deadline = Date.now() + 4000;
+        while (!released && Date.now() < deadline) {
+          void cdp.send('Runtime.terminateExecution').catch(() => {});
+          released = await Promise.race([
+            cdp.send('Runtime.evaluate', { expression: '1', returnByValue: true }).then(() => true).catch(() => false),
+            new Promise((resolve) => setTimeout(() => resolve(false), 700)),
+          ]);
+          if (!released) await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+      } else {
+        // 没有存量会话（建页时 attach 失败）：不现场 attach（会毒化管道），直接按超时返回。
+      }
+      if (!released) return false;
       const url = page.url();
       const tabId = [...session.tabs].find(([, candidate]) => candidate === page)?.[0];
       if (tabId) session.tabs.delete(tabId);
@@ -520,6 +576,9 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
         await page.goto(target, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
       } catch (error) {
         throw fail(`browser: 导航到 "${target}" 失败：${describe(error)}`, 'BROWSER_NAVIGATION_FAILED', error);
+      } finally {
+        // 导航后重建卡死恢复通道：moli 上导航前建的会话会随导航失效（命令无响应）。
+        this.#cacheKillCdp(page);
       }
     }
 
@@ -874,7 +933,11 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
       const expression = `(function(){ return eval(${JSON.stringify(script)}); }).apply(null, ${JSON.stringify(args)})`;
       return this.#record(session, 'execute', { script, args }, async () => {
         try {
-          const value = await this.#withTimeout(page.evaluate(expression), timeoutMs, 'BROWSER_EXECUTE_TIMEOUT');
+          // 超时先返回后，原调用仍可能被 terminate 打断而迟到 reject：预挂 catch，
+          // 否则 Node24 未处理 rejection 会直接打崩宿主进程。
+          const pending = page.evaluate(expression);
+          pending.catch(() => {});
+          const value = await this.#withTimeout(pending, timeoutMs, 'BROWSER_EXECUTE_TIMEOUT');
           return { ok: true, value };
         } catch (error) {
           // 契约里 execute 不抛错：超时与页面异常都落在 ok:false/exception 上。
@@ -972,6 +1035,8 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
         await page.reload({ waitUntil: 'domcontentloaded', timeout: config.navigationTimeoutMs });
       } catch (error) {
         throw fail(`browser: 刷新失败：${describe(error)}`, 'BROWSER_NAVIGATION_FAILED', error);
+      } finally {
+        this.#cacheKillCdp(page); // 导航后重建卡死恢复通道
       }
     }
 
@@ -1211,6 +1276,8 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
         await page.goBack({ waitUntil: 'domcontentloaded', timeout: config.navigationTimeoutMs });
       } catch (error) {
         throw fail(`browser: 后退失败：${describe(error)}`, 'BROWSER_NAVIGATION_FAILED', error);
+      } finally {
+        this.#cacheKillCdp(page); // 导航后重建卡死恢复通道
       }
     }
 
@@ -1222,6 +1289,8 @@ export function createProvider({ chromium, BrowserError, config, log, autoStart 
         await page.goForward({ waitUntil: 'domcontentloaded', timeout: config.navigationTimeoutMs });
       } catch (error) {
         throw fail(`browser: 前进失败：${describe(error)}`, 'BROWSER_NAVIGATION_FAILED', error);
+      } finally {
+        this.#cacheKillCdp(page); // 导航后重建卡死恢复通道
       }
     }
 

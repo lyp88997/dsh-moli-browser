@@ -2,6 +2,8 @@
 
 > 目标：自建一个本地浏览器服务，既能被 **DSH 的浏览器工具**调用，也能被 **dsh-univer-office** 这类"要一个浏览器可执行文件"的插件调用。
 > 结论基于本机实测（DSH 0.1.5-rc.3 / Debian 12 容器 / 非 root / host 网络 / 内存上限 2G）。
+>
+> **版本注记（1.0.1）**：本文是立项时代的可行性分析，历史记录原样保留。此后本包已按方案 A 单换 **moli** 内核（`moli serve` 直连、`moliEnv` 注入用户态库与字体、无 Chromium 沙箱参数）；文中 `chrome-headless-shell`、`--remote-debugging-port`、`--no-sandbox`、包装脚本等处均指当时实测，**CDP 单例、多会话隔离、73ms 接入这些核心结论对 moli 同样成立**。
 
 ## 0. 结论（先看这个）
 

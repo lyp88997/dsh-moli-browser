@@ -1,15 +1,14 @@
 ---
 name: browser-runtime
-description: 浏览器工具报错（no usable browser provider / 无法连接 CDP 端点 / 401 / BROWSER_TAB_LIMIT / 会话内没有可用标签页）、截图纯白、中文变方块、重启 dsh 后浏览器失效、面板报 403/404/405 时用；也用于起停与诊断 browsersvc 守护进程、安装/升级到活 profile、重建非 root 用户态 Chromium、改 browser provider 配置、看观测日志与回滚 —— 含 browsersvc CLI 速查、技能 --install/--uninstall、状态文件与凭据门、面板六条路由与状态码、排障表与两条必知机制（bundles 与 patch 双注册）
-whenToUse: 浏览器不可用 / 渲染异常 / 面板或路由报错 / dsh 重启后失效 / 需起停或诊断 browsersvc / 需重建运行时、改 provider 配置或回滚时
+description: 浏览器工具报错（no usable browser provider / 无法连接 CDP 端点 / 401 / BROWSER_TAB_LIMIT / 会话内没有可用标签页）、截图纯白、中文变方块、重启 dsh 后浏览器失效、面板报 403/404/405 时用；也用于起停与诊断 browsersvc 守护进程、安装/升级到活 profile、moli 内核的安装与校验、改 browser provider 配置、看观测日志与回滚 —— 含 browsersvc CLI 速查、技能 --install/--uninstall、状态文件与凭据门、面板六条路由与状态码、排障表与两条必知机制（bundles 与 patch 双注册）
+whenToUse: 浏览器不可用 / 渲染异常 / 面板或路由报错 / dsh 重启后失效 / 需起停或诊断 browsersvc / 需安装 moli、改 provider 配置或回滚时
 disable-model-invocation: true
 ---
 
-# browser-runtime — 浏览器服务、用户态 Chromium 与 dsh 配置运维
+# browser-runtime — 浏览器服务、moli 内核与 dsh 配置运维
 
-> 姊妹技能 `browser` 讲**怎么用**；本技能讲**怎么修、怎么起停、怎么重建、怎么改配置、怎么看观测、怎么回滚**。
-> 2026-09-30 实测校正（DSH 0.2.0-rc.2 + `dsh-moli-browser` v0.8.2）。本技能与正文随包发布（`skills/browser-runtime/`），装包时由插件的**内置技能提供者**提供（`source:'bundled'` + rank 600，技能中心显示「系统内置」），不是落盘的用户级技能——详见 §5。
-> 同日重启后做的活实例复核（四条全过）：① 自启 cmdline 是 `…/profiles/web/node_modules/dsh-moli-browser/bin/browsersvc.mjs run --idle-ms=300000`；② `maxTabs` 默认 5 真的拦第 6 个 `browser_open{newTab:true}`（报 `BROWSER_TAB_LIMIT`）；③ 关闭会话后 CDP 连接立刻断；④ 守护进程在启动后约 298 秒按 `idle-ms=300000` 退出，11 个内核进程一起回收，cgroup 内存 1814MB → 1181MB。
+> 姊妹技能 `browser` 讲**怎么用**；本技能讲**怎么修、怎么起停、怎么装内核、怎么改配置、怎么看观测、怎么回滚**。
+> 2026-10-04 实测校正（`dsh-moli-browser` v1.0.1，内核 **moli** 单发动机）。本技能与正文随包发布（`skills/browser-runtime/`），装包时由插件的**内置技能提供者**提供（`source:'bundled'` + rank 600，技能中心显示「系统内置」），不是落盘的用户级技能——详见 §5。
 
 ## 1. 现在的结构
 
@@ -19,7 +18,7 @@ disable-model-invocation: true
       └─ 插件 dsh-moli-browser（一个包 = provider + 守护进程 CLI + 网页面板 + 两份随包技能）
           └─ playwright-core connectOverCDP → 127.0.0.1:9333（Bearer token）
               └─ browsersvc supervisor（回环代理 + 门禁 + 内核生命周期）
-                  └─ chrome-headless-shell 154.0.8037.57（经 chromium-wrapper.sh）
+                  └─ moli serve --layout --resource（守护进程 moliEnv 自动注入 LD_LIBRARY_PATH / FONTCONFIG_FILE）
 ```
 
 - **为什么不用内置 Electron provider**：`dsh-builtin-browser` 的 Electron 探测路径 `profiles/web/node_modules/electron/dist/electron` 从未下载（目录里只有 cli.js / install.js），报 `no usable browser provider is registered`；本机无 root、无 GUI 库，seccomp 下 Chromium 沙箱也起不来。
@@ -63,7 +62,7 @@ dsh --profile web --dump-config | grep -E 'browserProvider|patched by|not found'
 | --- | --- |
 | `status` | 读状态文件 + 探测公开端口；输出 `running/healthy/port/internalPort/pid/browserPid/kernel/browserVersion/wsEndpoint(带 token)/startedAt/idleMs/logFile`。健康 exit 0，未运行 exit 1 |
 | `start` | 起后台单例（幂等）；成功打印 `{started:true,…}`，失败 exit 2 |
-| `stop [--force]` | 先做身份校验（`/proc/<pid>/cmdline` 含 `browsersvc.mjs`、内核含 `--remote-debugging-port=<内部端口>`）；不匹配就拒绝且**保留**状态文件，`--force` 才强杀 |
+| `stop [--force]` | 先做身份校验（`/proc/<pid>/cmdline` 含 `browsersvc.mjs`；内核 cmdline 含登记的监听端口——moli 形参 `--port=<内部端口>` 或旧式 `--remote-debugging-port=<内部端口>`）；不匹配就拒绝且**保留**状态文件，`--force` 才强杀 |
 | `restart` | 停旧起新，输出 `{restarted:true,stopped:true,started:true,…}`；token 会换新 |
 | `logs [--lines=60]` | 打印日志尾部（`--lines` 必须正整数） |
 | `ops [--lines=20] [--json]` | 最近 N 次浏览器操作（动作 / 耗时 ms / 成败 / 错误原因 / 会话+标签），读 `ops.jsonl` |
@@ -75,8 +74,8 @@ dsh --profile web --dump-config | grep -E 'browserProvider|patched by|not found'
 | `run` | 前台跑 supervisor（`start` 内部用它） |
 | `skills [--install\|--uninstall] [--force] [--dir=…] [--json]` | 随包技能：查看 / 落盘 / 撤销，见 §5 |
 
-- 参数：`--root`（默认 `$DSH_HOME/browser-service`）、`--port`（默认 9333）、`--idle-ms`（CLI 默认 900000，允许 1000..86400000）、`--kernel`、`--wrapper`、`--user-data-dir`、`--start-timeout`、`--internal-port-base`。
-- env：`DSH_BROWSER_SVC_ROOT` / `DSH_BROWSER_SVC_PORT` / `DSH_BROWSER_SVC_IDLE_MS` / `DSH_BROWSER_CHROME` / `DSH_BROWSER_WRAPPER`；也可写 `$ROOT/config.json`。优先级 **CLI > env > config.json > 自动探测**；非整数/越界会被拒（`无效的 port：99999（允许 0..65535）`，exit 2）。
+- 参数：`--root`（默认 `$DSH_HOME/browser-service`）、`--port`（默认 9333）、`--idle-ms`（CLI 默认 900000，允许 1000..86400000）、`--kernel`、`--wrapper`、`--user-data-dir`、`--start-timeout`、`--internal-port-base`、`--screencast-interval-ms`（moli 推流帧间隔，10..60000，**默认 200**——实测滚动最顺滑档，静止零流量；需 `--layout`——本包恒开）。
+- env：`DSH_BROWSER_SVC_ROOT` / `DSH_BROWSER_SVC_PORT` / `DSH_BROWSER_SVC_IDLE_MS` / `DSH_BROWSER_MOLI`（moli 二进制路径）/ `DSH_BROWSER_WRAPPER` / `DSH_BROWSER_SCREENCAST_INTERVAL_MS` / `DSH_BROWSER_LIBS` / `DSH_BROWSER_FONTCONFIG`；也可写 `$ROOT/config.json`（数值键 `screencastIntervalMs` 等同名）。优先级 **CLI > env > config.json > 自动探测**；非整数/越界会被拒（`无效的 port：99999（允许 0..65535）`，exit 2）。
 - 内核只绑 `127.0.0.1`（本机是 host 网络，**别**把 CDP 端口改到 `0.0.0.0`）。
 
 ## 5. 随包技能与「系统内置」身份
@@ -173,13 +172,12 @@ dsh --profile web --dump-config | grep -E 'browserProvider|patched by|not found'
 | 面板路由报 404（例如 `POST /browser-service/logs` 返回 404/405） | 宿主半边是旧版，新路由没挂 → **重启 DSH**；客户端会明说「宿主半边是旧版，重启 DSH 后生效」 |
 | 面板路由报 403（非本机访问 DSH Web） | 实时窗口只对本机回环开放；换到本机浏览器访问，或只用 `browsersvc` CLI 看观测 |
 | `browser: 只允许 http(s) URL` | provider 只接 http(s) → 本地 HTML 起本地 http 服务 |
-| `浏览器内核不存在 / 不可执行` | `--kernel` 指错或内核没下全（见 §12）；包装器必须可执行 |
-| `error while loading shared libraries: libglib-2.0.so.0`（exit 127） | 直接跑了真二进制 → 必须经 `chromium-wrapper.sh`；或 `libs/` 不全，重跑 `setup-libs.sh` |
-| `ldd` 有 `not found` | `LD_LIBRARY_PATH` 必须**两个目录都给**：`libs/usr/lib/x86_64-linux-gnu` **和** `libs/lib/x86_64-linux-gnu` |
-| `FATAL:…zygote_host_impl_linux.cc] No usable sandbox!` | 容器 `NoNewPrivs=1` + seccomp ⇒ 必须 `--no-sandbox`（包装器已带） |
-| 渲染崩溃 / 共享内存错误 | `/dev/shm` 只有 64M ⇒ 必须 `--disable-dev-shm-usage`（包装器已带） |
-| 截图纯白 | 没给 fontconfig ⇒ `FONTCONFIG_FILE=…/fonts.conf`（包装器已带） |
-| 中文全方块；两张等长不同汉字截图指纹完全相同 | 缺 CJK 字体 ⇒ `setup-libs.sh` 种子加 `fonts-noto-cjk` 重跑 |
+| `浏览器内核不存在 / 不可执行` | `--kernel` 指错或 moli 没解压好（见 §12）；`--wrapper` 指的脚本必须可执行 |
+| 启动报「未找到 moli 浏览器内核…三步装好」（`MOLI_INSTALL_HINT`） | moli 没装或探测不到 → 按提示装（README「浏览器内核」节），或 `DSH_BROWSER_MOLI=/path/to/moli` 指定；装好后 `browsersvc detect` 应列出它 |
+| `error while loading shared libraries: libfontconfig.so.1` 之类（exit 127） | 动态库没注入 → 守护进程会自动注入（`moliEnv`）；检查 `DSH_BROWSER_LIBS` 指向的目录存在、`libs/` 是否完整（重跑 `setup-libs.sh`） |
+| `ldd` 有 `not found` | `LD_LIBRARY_PATH` 必须**两个目录都给**：`libs/usr/lib/x86_64-linux-gnu` **和** `libs/lib/x86_64-linux-gnu`（`moliEnv` 默认两个都注入） |
+| 截图纯白 | fontconfig 没生效 → 检查 `FONTCONFIG_FILE`（`moliEnv` 默认注入 `/home/node/DSH/.browser/fonts.conf`，可用 `DSH_BROWSER_FONTCONFIG` 覆盖） |
+| 中文全方块；两张等长不同汉字截图指纹完全相同 | fonts.conf 指向的字体目录缺 CJK 字体 ⇒ `setup-libs.sh` 种子加 `fonts-noto-cjk` 重跑 |
 | 重启 dsh 后浏览器又坏 / 出现两条同 id 条目 | `bundles` 与 patch 双注册，见 §7 机制 2 |
 | `/tmp` 下的预览工装、`verify-*` 临时 root 消失 | `/tmp` 会被清理；验收脚本本来就该自建临时 root（见 §10），工装（如 `/tmp/panel-preview`）没了重跑即可，不是运行时故障 |
 | 图片读不出来（`vision engine failed`） | 与浏览器无关：`npx @liustack/modlens doctor` |
@@ -205,55 +203,50 @@ dsh --profile web --dump-config | grep -E 'browserProvider|patched by|not found'
 
 ```bash
 cd /home/node/DSH/dsh-moli-browser
-node scripts/verify-daemon.mjs     # 守护进程 + CLI：35/35
-node scripts/verify-provider.mjs   # provider + P7 分辨率 + 随包技能提供者：125 通过 0 失败
+node scripts/verify-daemon.mjs     # 守护进程 + CLI：38/38（含新增题⑤⑥）
+node scripts/verify-provider.mjs   # provider + P7 分辨率 + 随包技能提供者：130 通过 0 失败（含新增题①②③）
 node scripts/verify-bundle.mjs     # 组合包安装 + 客户端半边（5c 29 项）+ 随包技能：75/75
-node scripts/verify-data.mjs       # 观测面 + 实时窗口（六条路由与三道闸）：86 通过 0 失败
+node scripts/verify-data.mjs       # 观测面 + 实时窗口（六条路由与三道闸）：88 通过 0 失败（含新增题④）
 node scripts/verify-matrix.mjs --dsh dsh --smoke   # DSH 版本矩阵：4 个宿主版本 × 12 项
 node bin/browsersvc.mjs status     # running/healthy + wsEndpoint 带 token
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:9333/json/version   # 期望 401
-ps -eo pid,ppid,args | grep -m1 '[c]hrome-headless-shel[l]'   # 内核 ppid = supervisor
+ps -eo pid,ppid,args | grep -m1 '[m]oli serv[e]'   # 内核 ppid = supervisor
 ```
 
 - 四套脚本都用 `/tmp` 下的一次性 root/端口，**别指向 `$DSH_HOME/browser-service`**（脚本会按 pid 收敛实例并 `rmSync` 临时 root）。
 - 验证顺序：改插件代码 → 跑对应 verify → **重启 DSH** 才进活实例；只改客户端半边 → 刷新页面。
 
-## 11. 运行时目录清单（`/home/node/DSH/.browser/`，2026-09-28 清理后实测 389MB）
+## 11. 目录清单（`/home/node/DSH/.browser/`，本包 moli 依赖 + univer/历史资产）
 
 | 路径 | 作用 | 大小 |
 | --- | --- | --- |
-| `chromium-wrapper.sh` | 启动包装器：export `LD_LIBRARY_PATH` + `FONTCONFIG_FILE`，exec 真二进制并追加 `--no-sandbox --disable-dev-shm-usage` | 1KB |
-| `chromium/chrome-headless-shell` | 稳定符号链接 → `puppeteer/…/chrome-headless-shell` | — |
-| `libs/` | 用户态系统库前缀（43 个 .deb 解包，含中文字体） | 126MB |
-| `fonts.conf` | fontconfig：`<dir>`→`libs/usr/share/fonts`，`<cachedir>`→`fontcache` | 小 |
-| `puppeteer/` | `@puppeteer/browsers` 下载的 chrome-headless-shell | 263MB |
-| `screenshots/` | 历史截图落盘目录 | 284KB |
+| `libs/` | 用户态系统库前缀（43 个 .deb 解包，含中文字体）——**moli 运行必需**，`moliEnv` 默认注入 | 126MB |
+| `fonts.conf` | fontconfig：`<dir>`→`libs/usr/share/fonts`，`<cachedir>`→`fontcache`——**moli 运行必需**，`moliEnv` 默认注入 | 小 |
 | `setup-libs.sh` | 重建脚本（apt-get download → dpkg-deb -x，非 root） | 2KB |
+| `chromium-wrapper.sh`、`chromium/`、`puppeteer/` | **univer 与历史资产**：本包守护进程已改用 moli、不再引用；univer 的 `browserExecutablePath` 仍指 wrapper | 390MB |
+| `screenshots/` | 历史截图落盘目录 | 284KB |
 | `cordis.patch.yml.a1-backup` | 回到旧 A1 方案（`dsh-playwright-browser`）的 patch 备份 | 4.6KB |
-| `browse.mjs`、`verify-cjk.mjs`、`verify-daemon.mjs` | 逃生舱与验证脚本（包内 `skills/browser-runtime/scripts/` 下有副本） | 小 |
+| `browse.mjs`、`verify-cjk.mjs` | 逃生舱与验证脚本（包内 `skills/browser-runtime/scripts/` 下有副本） | 小 |
 
-- 包装器可被覆盖：`DSH_BROWSER_PREFIX` / `DSH_BROWSER_FONTCONF` / `DSH_BROWSER_CHROME`。
-- 内核 userDataDir 归守护进程管（`$ROOT/profile`，默认 `$DSH_HOME/browser-service/profile`）。
-- `moli/`（早期浏览器）、`profile/`/`daemon-profile/`/`pw/`（早期残留）2026-09-28 已删。
+- moli 二进制本体在 `安装包/moli-<版本>-x86_64-unknown-linux-gnu/moli`（探测已知落点），也可放 PATH 或 `DSH_BROWSER_MOLI` 指定。
+- univer 包装器可被覆盖：`DSH_BROWSER_PREFIX` / `DSH_BROWSER_FONTCONF` / `DSH_BROWSER_CHROME`（只作用于 univer 自己那条链）。
+- 内核 userDataDir 归守护进程管（`$ROOT/profile`，默认 `$DSH_HOME/browser-service/profile`；moli 用 `-P/--profile-dir` 持久登录态）。
 
-## 12. 重建 / 迁移（无 root）
+## 12. 安装 / 迁移 moli 内核（无 root）
 
 ```bash
-cd /home/node/DSH/.browser
-./setup-libs.sh                       # 1) 用户态系统库（42–43 包，约 124MB，含中文）
-cd /home/node/.dsh/profiles/web/node_modules/.bin
-./browsers install chrome-headless-shell@stable --path /home/node/DSH/.browser/puppeteer   # 2) 内核
-ln -sfn /home/node/DSH/.browser/puppeteer/chrome-headless-shell/linux-<版本>/chrome-headless-shell-linux64/chrome-headless-shell \
-        /home/node/DSH/.browser/chromium/chrome-headless-shell
-# 3) 校验
-W=/home/node/DSH/.browser
-LD_LIBRARY_PATH=$W/libs/usr/lib/x86_64-linux-gnu:$W/libs/lib/x86_64-linux-gnu \
-  ldd $W/chromium/chrome-headless-shell | grep -c 'not found'      # 期望 0
-$W/chromium-wrapper.sh --dump-dom https://example.com | grep -o '<title>.*</title>'
-node $W/verify-cjk.mjs                                             # 期望「纯汉字截图互不相同」
+# 1) 装内核：从 https://github.com/lexmount/moli/releases 下载 x86_64-unknown-linux-gnu 包，解压后：
+sha256sum -c moli-<版本>-x86_64-unknown-linux-gnu.tar.gz.sha256   # 2) 校验（对照 release 页公布值）
+export PATH=$PATH:/path/to/安装包/moli-<版本>-x86_64-unknown-linux-gnu   # 或 DSH_BROWSER_MOLI=/path/to/moli
+moli --version                    # 期望输出 moli 1.1.12
+node bin/browsersvc.mjs detect    # 3) 探测应列出该 moli
+# 4) 库与字体（moli 依赖系统 fontconfig 动态库与 CJK 字体）
+cd /home/node/DSH/.browser && ./setup-libs.sh    # libs/ + fonts.conf 重建（非 root）
+# 5) 校验字体现在渲染
+node /home/node/DSH/.browser/verify-cjk.mjs      # 期望「纯汉字截图互不相同」
 ```
 
-`setup-libs.sh` 要点：非 root 走 `apt-get -o Dir::State::Lists=/tmp/aptl/lists -o Dir::Cache=… -o Dir::Cache::archives=… download` + `dpkg-deb -x`；种子含 `libnss3/libgbm1/libglib2.0-0/libX11…` + `fonts-liberation` + **`fonts-noto-cjk`（必需，否则中文是豆腐块）**；`PRUNE_RE` 排除 `libc6/libgcc-s1/libstdc++6` 等，**避免 `LD_LIBRARY_PATH` 覆盖系统 ABI**。
+`setup-libs.sh` 要点：非 root 走 `apt-get -o Dir::State::Lists=/tmp/aptl/lists -o Dir::Cache=… -o Dir::Cache::archives=… download` + `dpkg-deb -x`；种子含 `libfontconfig1` 相关库 + `fonts-liberation` + **`fonts-noto-cjk`（必需，否则中文是豆腐块）**；`PRUNE_RE` 排除 `libc6/libgcc-s1/libstdc++6` 等，**避免 `LD_LIBRARY_PATH` 覆盖系统 ABI**。
 
 ## 13. 回滚 / 清理
 
@@ -271,12 +264,12 @@ dsh plugin --profile web add dsh-builtin-browser && dsh plugin --profile web add
 ln -sfn /home/node/DSH/dsh-moli-browser node_modules/dsh-moli-browser
 ```
 
-`libs/`、`chromium/`、`chromium-wrapper.sh`、`fonts.conf` 是运行必需；`pw/`（仅验证用）、`univer-probe*.univer` 可删。
+`libs/`、`fonts.conf` 是 moli 运行必需（`moliEnv` 注入）；`chromium/`、`chromium-wrapper.sh` 只服务 univer 与历史链路，可留给 univer；`pw/`（仅验证用）、`univer-probe*.univer` 可删。
 
 ## 14. 安全与边界
 
 - 公开端口只绑回环并要求 Bearer token；但同机同 uid 仍能读 `service.json` 拿 token ⇒ token 是防误连/防盗用，**不是**多租户边界。
-- `--no-sandbox` ⇒ 页面以 dsh 进程权限运行；只访问可信站点，别在共享 `profile/` 里登录敏感账号（cookie 明文）。
+- moli 内核进程不使用 Chromium 沙箱模型 ⇒ 页面以 dsh 进程权限运行；只访问可信站点，别在共享 `profile/` 里登录敏感账号（cookie 明文）。
 - 写 `$DSH_HOME` / `/home/node/DSH/.browser` 超出默认 workspace-write 沙箱 ⇒ 需要一次 `danger-full-access` 提权；且**不能从承载当前会话的进程里重启 dsh 自己**。
 - 版本适配：启动期由 `plugin/lib/compat.js` 校验接缝导出面，不符只打印一句人话并安静退出。已实测矩阵（每版本 12 项、含真开 example.com）：**0.1.5-rc.3 / 0.1.7-rc.1 / 0.1.7-rc.2 / 0.1.6-alpha.2 全 12/12**；接缝 `dsh-builtin-browser` 实测面 0.1.22。未复测更早的 0.1.0-rc.x 与 macOS / Windows。
 - **网页面板是可选件**：用 `ctx.inject(["webServer"], …)` 挂路由，没有 `webServer` 或 ctx 上没有 `inject` 时只打一行 info 就跳过，**provider 不受影响**。挂载要重启 DSH；之后只改 `plugin/client.js` 不必重启。

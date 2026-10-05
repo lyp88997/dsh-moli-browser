@@ -5,11 +5,11 @@
 ![node](https://img.shields.io/badge/node-%3E%3D22.19-brightgreen)
 ![browser tools](https://img.shields.io/badge/browser__tools-33-informational)
 ![no root](https://img.shields.io/badge/root-not%20required-success)
-![verification](https://img.shields.io/badge/verification-35%2F125%2F70%2F86-success)
+![verification](https://img.shields.io/badge/verification-38%2F130%2F88%2F75-success)
 
-**给 DSH 一个能跑在无 root、无 GUI 容器里的浏览器。** 一个包、一条 `dsh plugin add` 装完即用：单例 CDP 守护进程（用户态 `chrome-headless-shell`，只绑回环、带 Bearer token 门）+ 完整的 33 个 `browser_*` 工具面 + `ctx.browser` 接缝的 `cdp-daemon` provider + 一个网页浮动窗口（实时画面可点可打字）+ 两份随包全局技能。不需要 Electron、不需要 GUI 库、不需要 root、没有构建步骤。
+**给 DSH 一个能跑在无 root、无 GUI 容器里的浏览器。** 一个包、一条 `dsh plugin add` 装完即用：单例 CDP 守护进程（内核 = **moli**，只绑回环、带 Bearer token 门）+ 完整的 33 个 `browser_*` 工具面 + `ctx.browser` 接缝的 `cdp-daemon` provider + 一个网页浮动窗口（实时画面可点可打字）+ 两份随包全局技能。不需要 Electron、不需要 GUI 库、不需要 root、没有构建步骤。
 
-> **English TL;DR** — A single-package browser backend for DSH. One tarball ships a singleton CDP daemon (user-space `chrome-headless-shell`, bound to loopback behind a Bearer-token proxy), the full 33-tool `browser_*` surface, the `ctx.browser` seam provider `cdp-daemon`, an in-page floating panel (live interactive view + logs + appearance settings) and two bundled global skills. No root, no GUI libraries, no Electron, no build step.
+> **English TL;DR** — A single-package browser backend for DSH. One tarball ships a singleton CDP daemon (engine: **[moli](https://github.com/lexmount/moli)**, bound to loopback behind a Bearer-token proxy), the full 33-tool `browser_*` surface, the `ctx.browser` seam provider `cdp-daemon`, an in-page floating panel (live interactive view + logs + appearance settings) and two bundled global skills. No root, no GUI libraries, no Electron, no build step. Platform: x86_64 Linux (glibc) only.
 > ```bash
 > dsh plugin --profile web add dsh-moli-browser@latest   # then restart DSH
 > ```
@@ -50,10 +50,10 @@
 
 | 现状问题 | 本项目的做法 |
 |---|---|
-| DSH 内置 `dsh-builtin-browser` 的 provider 是自托管 Electron：没有 Electron 二进制、没有 GUI 库、seccomp 下 `No usable sandbox!` | 用系统已有的 `chrome-headless-shell`，`--no-sandbox --disable-dev-shm-usage`，库用用户态目录，不需要 root |
+| DSH 内置 `dsh-builtin-browser` 的 provider 是自托管 Electron：没有 Electron 二进制、没有 GUI 库、seccomp 下 `No usable sandbox!` | 用 **moli**（静态 Linux 二进制，自带排版与资源管线），`--layout --resource`，库/字体指向用户态目录，不需要 root |
 | 每个消费方各起一个浏览器（内存重复） | **一个守护进程**，多客户端通过 CDP 连入，会话用隔离 `BrowserContext` 分开 |
 | CDP 端口若对外监听 = 把浏览器（含 cookie）交给主机上任意进程 | 内核只绑 `127.0.0.1:<内部随机端口>`，对外只暴露**本机回环代理**（要求 Bearer token，只放行读元数据与 `/devtools`）；代理顺带精确统计连接数 |
-| `dsh-univer-office` 只接受「浏览器可执行文件路径」，无法连远端 CDP | 同一个内核外面套一层包装脚本当 `browserExecutablePath`（同一份二进制与库，不共享进程） |
+| `dsh-univer-office` 只接受「浏览器可执行文件路径」，无法连远端 CDP | univer 用它自己的包装脚本起临时实例（它没有 `connectOverCDP` 能力），与本包守护进程互不影响 |
 
 ## 安装
 
@@ -62,8 +62,8 @@
 dsh plugin --profile web add dsh-moli-browser@latest
 
 # 钉版本 / 离线分发（同一个包）：Release 资产或本地 tarball
-#   dsh plugin --profile web add https://github.com/lyp88997/dsh-moli-browser/releases/download/v0.8.2/dsh-moli-browser-0.8.2.tgz
-#   dsh plugin --profile web add ./dsh-moli-browser-0.8.2.tgz
+#   dsh plugin --profile web add https://github.com/lyp88997/dsh-moli-browser/releases/download/v1.0.1/dsh-moli-browser-1.0.1.tgz
+#   dsh plugin --profile web add ./dsh-moli-browser-1.0.1.tgz
 
 # 然后重启 DSH（插件在 boot 时 import，热重载不可靠），再校验组合：
 dsh --profile web --dump-config | grep -E 'browserProvider|# == dsh-moli-browser|not found'
@@ -81,7 +81,8 @@ dsh --profile web --dump-config | grep -E 'browserProvider|# == dsh-moli-browser
 **三条不要做的事**
 
 - **不要再单独装 `dsh-builtin-browser`**：它若同时是组合包，`browser`/`tool-browser` 两个 id 会被插两次、33 个工具重名挂两遍。已装过就先 `dsh plugin --profile <name> remove dsh-builtin-browser`。
-- **不要用旧名 `dsh-browser-moli` 当裸包名**（v0.4.0 之前子包的名字）：npm 上的 `dsh-browser-moli` 是别人的同名包（drscrewdriver，0.17.4），写了就装到别人家。本包自 2026-09-27 起以 `dsh-moli-browser` 发布，当前版本 **0.8.1**。
+- **不要与旧包 `dsh-browser-service` 同时装**：两包共用 `browsersvc` CLI 名与 `/browser-service/*` 面板路由，同装必撞（pnpm 会警告 bin 冲突）。装本插件前先 `dsh plugin --profile <name> remove dsh-browser-service` 并重启 DSH。
+- **不要用旧名 `dsh-browser-moli` 当裸包名**（前身子包的名字）：npm 上的 `dsh-browser-moli` 是别人的同名包（drscrewdriver），写了就装到别人家。本包是 `dsh-moli-browser`，当前版本 **1.0.1**（1.0.1 = moli 单发动机重写首版）。
 - **不要与手写 patch 同时用**：bundle patch 与手写 `profiles/<name>/cordis.patch.yml` 的 `insert` 行会重复（写法见 [`docs/profile-patch.browser-service.yml`](https://github.com/lyp88997/dsh-moli-browser/blob/main/docs/profile-patch.browser-service.yml)，只在改源码时临时用）。
 
 组合（`plugin/cordis.patch.yml`）自动做四件事：插入接缝 `browser`（选 `cdp-daemon`）、插入 `tool-browser`、插入 `browser-moli` provider、关掉内置 `browser-electron` 与 `dsh-playwright-browser`（后者自带 10 个与内置**同名**的 `browser_*` 工具，两个 provider 的工具面不能共存）。
@@ -144,15 +145,18 @@ curl -s -H "Authorization: Bearer $TOKEN" 127.0.0.1:9333/json/version
 node bin/browsersvc.mjs stop
 ```
 
-本机（DSH 容器）实测可用的一行：
+本机（DSH 容器）实测可用的一行——**通常什么都不用带**，探测会按 `DSH_BROWSER_MOLI` → `PATH` 的 `moli` → 已知安装目录（如 `安装包/moli-*/moli`）自动找到内核：
 
 ```bash
-node bin/browsersvc.mjs start \
-  --wrapper=/home/node/DSH/.browser/chromium-wrapper.sh \
-  --port=9333 --idle-ms=900000
+node bin/browsersvc.mjs start --port=9333 --idle-ms=900000
 ```
 
-`--wrapper` 指向的包装脚本负责注入 `LD_LIBRARY_PATH`（用户态 43 个包）、`FONTCONFIG_FILE`（中文渲染）、并追加 `--no-sandbox --disable-dev-shm-usage`。没有包装脚本时，用 `--kernel=/path/to/chrome-headless-shell` 直接指定内核，但**必须**保证系统库与字体可用（否则截图纯白、中文变方块）。
+### 浏览器内核：moli 的安装、校验与字体
+
+- **安装**：从 [moli releases](https://github.com/lexmount/moli/releases) 下载与本机对应的包（x86_64 Linux 选 `x86_64-unknown-linux-gnu`），解压后把 `moli` 放进 `PATH`；或不放进 PATH，用 `DSH_BROWSER_MOLI=/path/to/moli`（CLI 等价 `--kernel=/path/to/moli`）指定。没装时 `start` 会打印同样的三步指引后拒绝启动。
+- **校验**：`sha256sum -c` 对照 release 页公布的 sha256；`moli --version` 应输出形如 `moli 1.1.12`。装好后 `node bin/browsersvc.mjs detect` 应列出它。
+- **字体 / 动态库**：守护进程启动内核时**自动注入**运行环境（`moliEnv()`）：`LD_LIBRARY_PATH` 指向本机用户态 libs（存在才注入，可用 `DSH_BROWSER_LIBS` 覆盖）、`FONTCONFIG_FILE` 指向 DSH 自带中文字体配置（可用 `DSH_BROWSER_FONTCONFIG` 覆盖）。症状排查：截图纯白 → 库没注入（检查 `DSH_BROWSER_LIBS` 目录存在）；中文变方块 → 字体配置（`FONTCONFIG_FILE` 指向的 fonts.conf 里要有中文字体，或装 `libfontconfig1` 与系统中文字体）。
+- **平台限定**：moli 发布物只有 x86_64 Linux（glibc）；macOS / Windows / 其他架构不支持（`detect` 探测不到就报安装指引）。
 
 ### 给 `dsh-univer-office` 用
 
@@ -162,7 +166,7 @@ node bin/browsersvc.mjs start \
     browserExecutablePath: /home/node/DSH/.browser/chromium-wrapper.sh
 ```
 
-保持现状即可：univer 用同一份二进制与库，自己起临时实例（它没有 `connectOverCDP` 能力，分析见 [`docs/design-notes.md`](https://github.com/lyp88997/dsh-moli-browser/blob/main/docs/design-notes.md)）。
+保持现状即可：univer 用它自己的包装脚本与 Chromium 起临时实例（与本包的 moli 守护进程互不共享进程、互不影响；它没有 `connectOverCDP` 能力，分析见 [`docs/design-notes.md`](https://github.com/lyp88997/dsh-moli-browser/blob/main/docs/design-notes.md)）。
 
 ## CLI 参考（`browsersvc`）
 
@@ -182,7 +186,7 @@ node bin/browsersvc.mjs start \
 | `cookies [--url=…] [--json\|--export=file\|--import=file]` | **cookie + localStorage** 导出/注入到文件（`--export` 0600 且拒绝覆盖；`--import` 需有活会话） |
 | `skills [--install] [--uninstall] [--force] [--dir=…] [--json]` | **随包技能**：不带 `--install`/`--uninstall` 只报每个文件的状态；`--install` 落盘（可选，默认 `$DSH_HOME/skills`）；`--uninstall` 撤掉落盘那份——见「随包技能」 |
 
-参数：`--root` `--port`（0 = 自动择取）`--idle-ms` `--kernel` `--wrapper` `--user-data-dir` `--max-restarts` `--start-timeout` `--internal-port-base`，对应环境变量 `DSH_BROWSER_SVC_ROOT` / `DSH_BROWSER_SVC_PORT` / `DSH_BROWSER_SVC_IDLE_MS` / `DSH_BROWSER_CHROME` / `DSH_BROWSER_WRAPPER`，也可写进 `$ROOT/config.json`。优先级：**CLI > 环境变量 > config.json > 自动探测**。`skills` 另有 `--dir` / `--force` / `--json`。
+参数：`--root` `--port`（0 = 自动择取）`--idle-ms` `--kernel` `--wrapper` `--user-data-dir` `--max-restarts` `--start-timeout` `--internal-port-base` `--screencast-interval-ms`（推流帧间隔，默认 **200**，滚动最顺滑、静止零流量），对应环境变量 `DSH_BROWSER_SVC_ROOT` / `DSH_BROWSER_SVC_PORT` / `DSH_BROWSER_SVC_IDLE_MS` / `DSH_BROWSER_MOLI` / `DSH_BROWSER_WRAPPER` / `DSH_BROWSER_SCREENCAST_INTERVAL_MS` / `DSH_BROWSER_LIBS` / `DSH_BROWSER_FONTCONFIG`，也可写进 `$ROOT/config.json`（数值键 `screencastIntervalMs` 等同名）。优先级：**CLI > 环境变量 > config.json > 自动探测**。`skills` 另有 `--dir` / `--force` / `--json`。
 
 ## 工具参考（33 个 `browser_*`）
 
@@ -342,7 +346,7 @@ node bin/browsersvc.mjs start \
 | 技能 | 讲什么 | 文件 |
 |---|---|---|
 | `browser` | **怎么用**：33 工具速查、实测的 `target` 语法、标准工作流、截图验证法、陷阱表 | `skills/browser/SKILL.md` |
-| `browser-runtime` | **怎么修**：`browsersvc` CLI 速查、安装/升级、状态文件与凭据门、排障表、非 root 重建用户态 Chromium 运行时 | `skills/browser-runtime/SKILL.md` + 同目录 `scripts/` 下的 5 个文件（`browse.mjs`、`chromium-wrapper.sh`、`fonts.conf`、`setup-libs.sh`、`verify-cjk.mjs`） |
+| `browser-runtime` | **怎么修**：`browsersvc` CLI 速查、安装/升级、状态文件与凭据门、排障表、moli 内核安装/校验与字体环境 | `skills/browser-runtime/SKILL.md` + 同目录 `scripts/` 下的 5 个文件（`browse.mjs`、`chromium-wrapper.sh`、`fonts.conf`、`setup-libs.sh`、`verify-cjk.mjs`） |
 
 **身份怎么来的（v0.8.2 起）**：插件用 DSH 的技能提供者接口注册它们——`ctx.skills.registerProvider()`，候选带 `source:'bundled'` 与 `rank:600`（`dsh-skill` 导出的 `BUNDLED_SKILL_RANK`），和 `dsh-univer-office` 的 `univer-skills` 是同一形态，技能中心据此显示成「系统内置」。技能正文是**现读** `skills/<name>/SKILL.md`（改文件不用重启 DSH），配置项 `registerSkills`（默认 `true`）可关。
 
@@ -421,9 +425,9 @@ browsersvc skills --dir=/path/skills --json   # 换目标目录 / 给脚本消�
 |---|---|
 | DSH | 支持 `dsh plugin` / `dsh.bundle` 的版本（本机在 `0.1.5-rc.3` 实测） |
 | Node.js | **≥ 22.19**（`package.json` 的 `engines`；守护进程只用 Node 内置模块，零第三方运行时依赖） |
-| 操作系统 | **Linux x86_64**。本项目在 Debian 12 容器（uid 1000、cgroup 只读、`/dev/shm` 64M、无 Xvfb）实测；**macOS / Windows 未测试** |
-| 浏览器内核 | 系统已有的 `chrome-headless-shell` / Chromium / Chrome，或用户态目录里的 `chrome-headless-shell` + 包装脚本（注入 `LD_LIBRARY_PATH` 与 `FONTCONFIG_FILE`，见 `bin/browsersvc.mjs detect`） |
-| 权限 | **不需要 root**；不需要 GUI 库，不需要 Xvfb。容器里 `NoNewPrivs=1` + seccomp 时 Chromium 沙箱起不来，因此固定加 `--no-sandbox --disable-dev-shm-usage` |
+| 操作系统 | **x86_64 Linux（glibc）**——moli 发布物只有这个平台。本项目在 Debian 12 容器（uid 1000、cgroup 只读、`/dev/shm` 64M、无 Xvfb）实测；**macOS / Windows 未测试且无 moli 发行版** |
+| 浏览器内核 | **moli**（单发动机）：`DSH_BROWSER_MOLI` → `PATH` 里的 `moli` → 已知安装目录（`安装包/moli-*/moli`）自动探测，`--kernel` / `--wrapper` / `DSH_BROWSER_WRAPPER` 保留为手动排障口（见 `bin/browsersvc.mjs detect` 与「浏览器内核」一节） |
+| 权限 | **不需要 root**；不需要 GUI 库，不需要 Xvfb。守护进程启动内核时自动注入 `LD_LIBRARY_PATH` / `FONTCONFIG_FILE`（moliEnv），moli 不使用 Chromium 沙箱模型 |
 | 网络 | 只监听 **127.0.0.1**（默认公开端口 9333，内核用内部端口）；不依赖外网 |
 | 磁盘 | 一个 profile 里的包体量 ≈ 依赖（`playwright-core` 约 14M，只做 CDP 客户端、**不下载浏览器**）；运行时数据在 `$DSH_HOME/browser-service` |
 
@@ -449,19 +453,19 @@ browsersvc skills --dir=/path/skills --json   # 换目标目录 / 给脚本消�
 **零依赖、不依赖外网**，脚本直接在仓库里跑：
 
 ```bash
-node scripts/verify-daemon.mjs      # M1 守护进程 + CLI 防御：35/35
-node scripts/verify-provider.mjs    # M2 provider + P7 分辨率 + 随包技能提供者：125 通过，0 失败
+node scripts/verify-daemon.mjs      # M1 守护进程 + CLI 防御：38/38（含新增题⑤⑥）
+node scripts/verify-provider.mjs    # M2 provider + P7 分辨率 + 随包技能提供者：130 通过，0 失败（含新增题①②③）
 node scripts/verify-bundle.mjs      # 组合包安装（官方 dsh plugin 流程）+ 随包技能：75/75
-node scripts/verify-data.mjs        # P3 观测面 + P4/P5 实时窗口 + P6 清理跳转 + P7 分辨率/偏移：86 通过，0 失败
+node scripts/verify-data.mjs        # P3 观测面 + P4/P5 实时窗口 + P6 清理跳转 + P7 分辨率/偏移：88 通过，0 失败（含新增题④）
 node scripts/verify-matrix.mjs --dsh <bin> --dsh <bin> --smoke   # 多版本 DSH 兼容矩阵（见上）
 ```
 
 | 套件 | 项数 | 覆盖 |
 |---|---|---|
-| `scripts/verify-daemon.mjs` | **35/35** | 守护进程启停/重启、token 与 401/403 凭据门、只绑回环、上下文隔离、崩溃重启、空闲退出、配置校验、启动失败不留孤儿、`stop` 身份校验、同一连接上的后续请求不免检（F27） |
-| `scripts/verify-provider.mjs` | **125 通过 / 0 失败** | 33 个工具的行为与边界（含 `execute`/`a11y`/`scrape`/`form`/`screenshot`/`download`/`auth`）、会话隔离与复活、保存路径准入与默认保存目录（D1）、代理对截断、**P1：`maxTabs` 上限（拒绝后不留半开页）、无会话时释放连接（守护进程按 `idleMs` 回收 + 自愈）、配置默认值（`maxTabs` 5 / `idleMs` 300000 / 视口 1920×1080）** → **P7：窗口分辨率 `setViewport`（配置初值、新页面按配置打开、改尺寸后真页面重排、新会话沿用、越界夹取、非法值报 `BROWSER_VIEWPORT_INVALID`）** → **随包技能提供者（8 项：`list()` 两份候选、`source:'bundled'` + rank 600 + `provider` 名一致、`resourceBase` 目录真实存在、候选形状满足 dsh-skill 校验、`browser-runtime` 保持模型不自动调用、`get()` 返回已剥 frontmatter 的正文、读不到的技能不进候选、`Config` 默认 `registerSkills:true`/`syncSkills:false`）** |
+| `scripts/verify-daemon.mjs` | **38/38** | 守护进程启停/重启、token 与 401/403 凭据门、只绑回环、上下文隔离、崩溃重启、空闲退出、配置校验、启动失败不留孤儿、`stop` 身份校验、同一连接上的后续请求不免检（F27）、**新增题⑤：moli 空闲 VmRSS ≤30MB、新增题⑥：重启后默认上下文 cookie 仍在（-P/--profile-dir 持久登录态）** |
+| `scripts/verify-provider.mjs` | **130 通过 / 0 失败** | 33 个工具的行为与边界（含 `execute`/`a11y`/`scrape`/`form`/`screenshot`/`download`/`auth`；**新增题①中文截图真实笔画、②JPEG 魔数、③13 页签上限**）、会话隔离与复活、保存路径准入与默认保存目录（D1）、代理对截断、**P1：`maxTabs` 上限（拒绝后不留半开页）、无会话时释放连接（守护进程按 `idleMs` 回收 + 自愈）、配置默认值（`maxTabs` 5 / `idleMs` 300000 / 视口 1920×1080）** → **P7：窗口分辨率 `setViewport`（配置初值、新页面按配置打开、改尺寸后真页面重排、新会话沿用、越界夹取、非法值报 `BROWSER_VIEWPORT_INVALID`）** → **随包技能提供者（8 项：`list()` 两份候选、`source:'bundled'` + rank 600 + `provider` 名一致、`resourceBase` 目录真实存在、候选形状满足 dsh-skill 校验、`browser-runtime` 保持模型不自动调用、`get()` 返回已剥 frontmatter 的正文、读不到的技能不进候选、`Config` 默认 `registerSkills:true`/`syncSkills:false`）** |
 | `scripts/verify-bundle.mjs` | **75/75** | 在一次性隔离 `DSH_HOME` 里跑官方 `add` → `--dump-config` → 转出口形状比对 → **P2：宿主 peer 解析、启动期探测（好/坏形状）、工具面计数 == 33** → **P3：客户端半边（loader 协议、cordis 插件形状、`apply` 注册到 `shell.overlay`、只点平台种子表）** → **P4：客户端引用的三条实时路由与服务端一字不差** → **P5：客户端导出的几何夹取与设置规整纯函数（三态夹取 + 越界回落）** → **0.8.2/G：`clampRect` 第四参「顶部留白」（窗口不许压到宿主顶栏）、`topInsetFromBoxes`/`resolveTopInset` 的自动量（贴顶 + 够宽 + 高度合理里取最高）与 0–200 夹取、`ratioOf` 的画面比例回退、`fitPicture`/`topInset` 两项新默认、没记过位置时摆正中** → **P6：`pillAnchor`（胶囊四角定位）与 `withScheme`（地址补协议）真跑一遍，并断言新增设置键 `pillPos`/`autoClean` 的默认与越界回落** → **P7：客户端的写路由引用（logs + viewport）与服务端一字不差、`clampRect` 的面板间距（第三参）、新设置键（`viewport`/`pillX`/`pillY`/`panelGap`/`zBase`）与脏输入规整、胶囊自定偏移** → **P8：窗口外观纯函数（`appearanceStyle` 的 CSS 变量——外壳的 rim/alpha/blur/sat/glow/solid 与「内部分区也跟着透明」的 `--bsp-card`/`--bsp-surface`、自定义色时分隔线 `--bsp-divider`；`borderOf` 只放行预设色或 `#rrggbb`、注入串回落主题色、不透明度 20–100 与玻璃档位回落）** → **P9：胶囊「自由」档（`left`/`top` 直给、超出视口按自身尺寸夹回、存储范围 0–10000）、`pillPoint` 四组坐标（自由/越界/左上/右下）、拖动接线七项（指针事件、指针捕获与释放、自由档 + 存储范围、拖动阈值 `DRAG_SLOP`、抓手样式 `bsp-grabbing`、`touch-action:none`）** → **P10（0.8.3）：「最大边」默认 1920（`normalizeSettings({})` 真跑）与取帧开关跨页签记忆（组件外 `liveStartedMemory`、初值 `??` 看「打开即取帧」、每次变化回写）** → **随包技能（第 6 段 11 项：空目录报缺失、`--install` 真落盘、台账、重复跑幂等、改过的文件不覆盖、`--force` 才覆盖、`--json` 可被脚本消费、插件源码里确实 `registerProvider` + `registerSkills`/`syncSkills` 两个默认值、落盘仍可选、`--uninstall` 保留改过的 1 个撤其余 6 个、撤净后连台账与空目录一起清掉）** → tarball 形状含两份 `SKILL.md`、`browser-runtime/scripts/` 与 `src/skill-provider.mjs` → `remove`，不碰默认 profile |
-| `scripts/verify-data.mjs` | **86 通过 / 0 失败** | **P3：`ops`/`console`/`network`/`har`/`cookies` 五个观测面 + 只读面板路由**——操作日志（含通用追踪覆盖 `snapshot`/`content`/`screenshot`/`listTabs`、失败记 `ok:false` 与原因）、控制台两类、网络两阶段、HAR 落盘与复制、cookie/localStorage 导出注入与权限、`panel.json` 的形状/行数/405/卸载、IO 失败不抛 → **P4：实时窗口四条路由与三道闸**（取帧 JPEG 与帧序号头、无新帧 204、打字/点击/goto 转发、未知动作 400、非本机 403、跨站 403、方法 405、DELETE 停流、无 provider 503、dispose 一起摘掉） → **P5：取帧参数透传与夹取（`x-frame-quality`/`x-frame-max`）、`live.json.options` 回读、`panel.json.service` 只读服务块**（版本/会话/上限/开关一致，且载荷不含本机绝对路径） → **P6：日志清理路由（`clear` 清三类、`trim` 留最近 N 条、未知类型 400、非 POST 405、跨站 403、非回环 403、dispose 摘掉）与「一个会话都没有」时地址栏跳转自动开会话并补 `https`、空网址 400、非跳转动作 409** → **P7：分辨率写路由**（`panel.json.service.viewport`、`POST /browser-service/viewport` 之后真页面视口变为新尺寸并回 `applied`、非法值 400、非 POST 405、跨站 403、非回环 403、无 provider 503、dispose 摘掉；另加「缺 `maxh` 时高度沿用当前值而不是塌到下限」这条画面糊的回归断言） |
+| `scripts/verify-data.mjs` | **88 通过 / 0 失败**（含新增题④：推流滚动/导航出新帧） | **P3：`ops`/`console`/`network`/`har`/`cookies` 五个观测面 + 只读面板路由**——操作日志（含通用追踪覆盖 `snapshot`/`content`/`screenshot`/`listTabs`、失败记 `ok:false` 与原因）、控制台两类、网络两阶段、HAR 落盘与复制、cookie/localStorage 导出注入与权限、`panel.json` 的形状/行数/405/卸载、IO 失败不抛 → **P4：实时窗口四条路由与三道闸**（取帧 JPEG 与帧序号头、无新帧 204、打字/点击/goto 转发、未知动作 400、非本机 403、跨站 403、方法 405、DELETE 停流、无 provider 503、dispose 一起摘掉） → **P5：取帧参数透传与夹取（`x-frame-quality`/`x-frame-max`）、`live.json.options` 回读、`panel.json.service` 只读服务块**（版本/会话/上限/开关一致，且载荷不含本机绝对路径） → **P6：日志清理路由（`clear` 清三类、`trim` 留最近 N 条、未知类型 400、非 POST 405、跨站 403、非回环 403、dispose 摘掉）与「一个会话都没有」时地址栏跳转自动开会话并补 `https`、空网址 400、非跳转动作 409** → **P7：分辨率写路由**（`panel.json.service.viewport`、`POST /browser-service/viewport` 之后真页面视口变为新尺寸并回 `applied`、非法值 400、非 POST 405、跨站 403、非回环 403、无 provider 503、dispose 摘掉；另加「缺 `maxh` 时高度沿用当前值而不是塌到下限」这条画面糊的回归断言） |
 | `scripts/verify-matrix.mjs` | **4 个宿主版本 × 12 项** | 把同一个 tarball 装进不同版本的 DSH：`add` → `--dump-config` → 入口可加载 → `apply(桩 ctx)` 注册出 provider 且探测无 error → `--smoke` 用装进来的 bin 自启守护进程、真开页面读回正文 |
 
 完整输出（35 条 PASS 原文、DSH 内端到端日志、未自动化覆盖的部分）见 [`docs/verification.md`](https://github.com/lyp88997/dsh-moli-browser/blob/main/docs/verification.md)。
@@ -508,9 +512,9 @@ npm publish --access public
 
 ### 安全模型
 
-1. **只绑回环**：本机是 host 网络，`0.0.0.0` 上的 CDP 端口等于把浏览器完全交给主机上任意进程。内核永远带 `--remote-debugging-address=127.0.0.1`，对外只走回环代理；验收脚本会解析 `/proc/net/tcp` 检查这一点。
-2. **`--no-sandbox` 是必需的**（容器 `NoNewPrivs=1` + seccomp 下 Chromium 沙箱起不来），因此**只访问可信站点**；需要更强隔离时把浏览器放进独立容器。
-3. **`--disable-dev-shm-usage` 必需**（`/dev/shm` 只有 64M）。
+1. **只绑回环**：本机是 host 网络，`0.0.0.0` 上的 CDP 端口等于把浏览器完全交给主机上任意进程。内核永远带 `--host 127.0.0.1`（moli serve 形参），对外只走回环代理；验收脚本会解析 `/proc/net/tcp` 检查这一点。
+2. **内核进程不带平台沙箱**（moli 不使用 Chromium 的沙箱模型，页面内容与本进程同权），因此**只访问可信站点**；需要更强隔离时把浏览器放进独立容器。
+3. **内存受控**：moli 不需要 Chrome 时代的 `--disable-dev-shm-usage` 对策；实测空闲 ≤30MB、5 站 ≤200MB（验收题读 `/proc/<pid>/status` VmRSS 断言），`/dev/shm` 64M 的容器内无异常。
 4. 会话隔离必须用 incognito `BrowserContext`，不要复用默认上下文。
 5. **公开端口要求凭据**：`Authorization: Bearer <token>`（每次守护进程启动随机生成，落在 0600 的 `service.json`）。代理只放行读元数据（`GET /json/version|/json/list|/json/protocol`）与 `/devtools/*`，挡掉 `/json/new|close|activate` 这类控制接口；`/json/version` 里的 `webSocketDebuggerUrl` 会被改写成代理自己的地址并附上 token，所以调用方（provider）不需要额外配置，也绕不开代理。内部内核端口仍只绑回环。**每条连接只认首个请求**：代理只在连接建立时解析一次请求头，所以非 WebSocket 请求一律按 `connection: close` 转发、响应后立刻关闭（否则同一连接上的后续请求就是免检的裸管道，F27）。
 6. **保存路径准入**：`browser_screenshot` / `browser_download` 的 `savePath` 必须是绝对路径、不得覆盖已有文件，并且必须落在 `downloadDir` 内（不配置时＝系统 Downloads 目录，见配置表；违规报 `BROWSER_SCREENSHOT_BLOCKED` / `BROWSER_DOWNLOAD_BLOCKED`）。这样接缝工具 schema 里那句「默认写进系统 Downloads 目录」才是真的，提示注入也没法让浏览器工具写任意路径。
@@ -523,7 +527,7 @@ npm publish --access public
 
 1. **一个 root 一个守护进程**（单例）。多个 profile 想共用内核要显式给同一个 `--root`；否则各自拉起一个。
 2. **只监听回环**，同 uid 的其它进程读得到 `service.json` 里的 token（文档权限 0600，但同 uid 可读）。这是本机隔离，不是跨用户隔离。
-3. **`--no-sandbox` 是必需项**（容器里 Chromium 沙箱起不来）⇒ 只访问可信站点；需要更强隔离就把浏览器放进独立容器。
+3. **内核进程不带平台沙箱**（moli 无 Chromium 沙箱模型）⇒ 只访问可信站点；需要更强隔离就把浏览器放进独立容器。
 4. **改插件代码或 profile patch 后必须重启 DSH**：完整 web profile 上 `patchReload: live` 会静默回滚（实测：探针条目 `applied` 后 6–7 ms 被 `disposed`，插件的 `apply` 根本没被调用；最小 profile 里热重载正常）。
 5. **插件与 `browsersvc` 必须同版本升级**：v0.3.0 起公开端口要 Bearer token，旧插件 + 新守护进程会 401（F19 修的是冷启动重读 token）。
 6. **工具面取决于依赖版本**：33 个 `browser_*` 来自 `dsh-builtin-browser`，上游增删工具时本包跟着变（本包只保证转出口形状一致、并把它写进验收）。
@@ -597,7 +601,7 @@ npm publish --access public
 | 里程碑 | 内容 | 状态 |
 |---|---|---|
 | **M1** | 守护进程 + 回环代理 + 空闲回收 + 崩溃重启 + 35 项验收 | ✅ 完成 |
-| **M2** | DSH provider 插件（`inject=['browser']` + `ctx.browser.registerBrowserProvider`），复用接缝包的 33 个 `browser_*` 工具 | ✅ 完成（125 项 + DSH 内端到端） |
+| **M2** | DSH provider 插件（`inject=['browser']` + `ctx.browser.registerBrowserProvider`），复用接缝包的 33 个 `browser_*` 工具 | ✅ 完成（130 项 + DSH 内端到端） |
 | **M6** | 代码审查 18 条缺陷修复（F1–F18） | ✅ 完成（v0.3.0 → v0.3.3） |
 | **M7** | 「一个包装完」：单一交付物，接缝与工具面由依赖 `dsh-builtin-browser` 转出 | ✅ 完成（v0.4.0） |
 | **P2** | DSH 版本适配：启动期能力探测 + 人话报错（`plugin/lib/compat.js`）、`schemastery` 改 peer、多版本实测矩阵 | ✅ 完成（v0.5.1） |
@@ -617,7 +621,8 @@ npm publish --access public
 
 ## 更新记录
 
-- **[CHANGELOG.md](https://github.com/lyp88997/dsh-moli-browser/blob/main/CHANGELOG.md)** —— v0.8.3 / v0.8.2 / v0.8.1 / v0.8.0 / v0.7.0 / 0.6.0 / 0.5.1 / 0.5.0 / 0.4.4 / 0.4.3 / 0.4.2 / 0.4.1 / 0.4.0 / 0.3.3 / 0.3.2 / 0.3.1 / 0.3.0，含每条真实缺陷（F1–F27、P1–P10、B1–B4、U1–U6、D1）的复现与修复。
+- **[CHANGELOG.md](https://github.com/lyp88997/dsh-moli-browser/blob/main/CHANGELOG.md)** —— v1.0.1（moli 单发动机重写首版）及其继承的前身历史（v0.8.3 / v0.8.2 / … / 0.3.0，含每条真实缺陷（F1–F27、P1–P10、B1–B4、U1–U6、D1）的复现与修复）。
+- 摘要：`1.0.1` **单发动机重写** —— 换 moli 内核（moli serve 直连，`--layout --resource`，自动注入 `LD_LIBRARY_PATH`/`FONTCONFIG_FILE`，`-P/--profile-dir` 持久登录态）；包名 `dsh-moli-browser`、插件 id `browser-moli`、版本从 1.0.1 起步；`stop` 身份校验改「内核命令行含登记监听端口」双认（`--remote-debugging-port=N` 或 `--port N`）；contenteditable 赋值改 DOM 直注入；新增 `--screencast-interval-ms`（默认 200，实测滚动最顺滑档）；窗口交互（`plugin/client.js`）与六条 `/browser-service/*` 路由原样不动。
 - 摘要：`0.8.3` 胶囊可拖动 + 取帧体验两条优化 —— 「胶囊位置」新增 `自由` 档（按屏幕坐标存），胶囊可直接拖到任意位置：松手自动切「自由」并立即写盘（只合并位置三个字段，不动其他未保存草稿），位移 ≤ 4px 仍算点击（原地单击照旧展开面板），渲染时按视口夹回屏内但只夹不改存，`pillPoint` 保证切档/起拖不跳；**取过帧后切到别的入口再切回会自动续上**（不用再点「开始」）、**「最大边」默认提到 1920**。只有客户端半边，刷新页面即可见；验收 35/35、125 通过 0 失败、**75/75**、86 通过 0 失败。
 - 摘要：`0.8.2` 调默认参数并按用户反馈修窗口几何 —— 默认参数改成取帧质量 70、打开面板不自动取帧、视口 1920×1080、背景不透明度 40% + 毛玻璃（宿主 `viewportWidth`/`viewportHeight` 同步 1920×1080；顺带修掉 `normalizeSettings` 里 `source.x !== false` 导致布尔默认值形同虚设的潜伏缺陷）＋ **G 窗口几何三项**（贴合画面比例＝按比例撑高去黑边、顶部留白＝窗口让开宿主顶栏且可手填、没记过位置时摆正中；并按真机复核修掉「贴合后首次打开偏上」）＋ **S2 随包技能改内置提供者**（技能中心显示「系统内置」，落盘改成可选，新增 `browsersvc skills --uninstall`）。验收 35/35、125 通过 0 失败、70/70、86 通过 0 失败。
 - 摘要：`0.8.1` 收口界面与外观并新增随包技能 —— P6 界面美化与体验修补（整套跟宿主设计令牌走、胶囊可换四角、菜单 SVG 图标与标签栏键盘导航、日志手动/自动清理、地址栏跳转无会话时自动开页且失败可见）＋ P7 窗口分辨率与胶囊坐标可调、清理可见化（分辨率真改浏览器视口、胶囊水平/垂直偏移 + 面板间距 + 层级基准、清理成败都有顶部提示、画面糊的根因已修）＋ P8 窗口外观可自定义与设置显式保存（边框颜色/背景不透明度/玻璃效果，窗口与胶囊共用且内部分区一起透明；改完先预览、点保存才落盘，成败都有提示，同一拍连点不互相覆盖）＋ **随包全局技能**（`browser`、`browser-runtime` 共 7 个文件，装完自动同步到 `$DSH_HOME/skills`，带归属台账：用户改过的文件不覆盖）。全部零新增工具（工具面仍是 33 个）。
@@ -640,7 +645,7 @@ npm publish --access public
 欢迎 issue / PR。提 PR 前请：
 
 1. 跑完四条验收脚本（`node scripts/verify-daemon.mjs && node scripts/verify-provider.mjs && node scripts/verify-bundle.mjs && node scripts/verify-data.mjs`），并在 PR 里贴计数；动了兼容面（接缝形状/宿主版本/入口导出）再加一遍 `verify-matrix.mjs`。改动行为时**同时补断言**，不要只改实现。
-2. 不要把「安全模型」里的约束放宽来让某个用例通过（回环绑定、Bearer token、路径白名单、面板写路由的三道闸、`--no-sandbox` + `--disable-dev-shm-usage`）。
+2. 不要把「安全模型」里的约束放宽来让某个用例通过（回环绑定、Bearer token、路径白名单、面板写路由的三道闸、内核只绑回环）。
 3. 改 `plugin/lib/index.js` 的 `Config` 默认值时必须同步本 README 的配置表；改 `plugin/client.js` 或 `plugin/lib/panel.js` 时注意 `verify-bundle.mjs` 的 5c 段会校验 loader 协议与路由引用。
 4. 提交信息写清「修的是什么、怎么复现」——本项目的 `CHANGELOG` 就是按这个格式维护的。
 

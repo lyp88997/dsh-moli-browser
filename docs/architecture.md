@@ -7,7 +7,7 @@ browser_* 工具（dsh-builtin-browser/tool-browser，经本包 plugin/shims/too
    └─ ctx.browser seam（dsh-builtin-browser/browser，经本包 plugin/shims/browser.js 转出）
         └─ dsh-moli-browser（本仓库 plugin/lib/provider.js，provider id = cdp-daemon）
              └─ playwright-core connectOverCDP → 127.0.0.1:9333（browsersvc 回环代理）
-                  └─ chrome-headless-shell（用户态库 + 包装脚本）
+                  └─ moli serve（单发动机内核；moliEnv 注入用户态库 + FONTCONFIG_FILE 字体配置）
 ```
 
 ## 1. 插件

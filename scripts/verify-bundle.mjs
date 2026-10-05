@@ -256,8 +256,12 @@ console.log('5c. 客户端半边（网页面板）');
   check('package.json 声明 exports["./client"] 与 dsh.client.platform=web',
     installedPkg.exports?.['./client'] === './plugin/client.js' && installedPkg.dsh?.client?.platform === 'web',
     JSON.stringify({ client: installedPkg.exports?.['./client'], dsh: installedPkg.dsh?.client }));
-  check('客户端入口走 window.__ModuleLoader__.load 且 id = 包名',
-    c.imported === 'ok' && c.loads?.length === 1 && c.loads[0]?.id === PKG && c.loads[0]?.factory === 'function',
+  // 平台硬约束（2026-10 GUI 实测）：注册 id 必须等于包名，否则 web 启动
+  // 「import failed」、面板打不开——注册 id = PKG（历史名 dsh-browser-service 只保留在
+  // STORAGE_KEY/STYLE_ID 等交互记忆键里）。
+  const CLIENT_MODULE_ID = PKG;
+  check('客户端入口走 window.__ModuleLoader__.load 且 id = 包名（平台硬约束）',
+    c.imported === 'ok' && c.loads?.length === 1 && c.loads[0]?.id === CLIENT_MODULE_ID && c.loads[0]?.factory === 'function',
     JSON.stringify({ imported: c.imported, loads: c.loads, stderr: (res.stderr ?? '').trim().split('\n')[0] }));
   check('factory 返回标准 cordis 插件（apply + inject: slots）',
     c.apply === 'function' && (c.inject ?? []).includes('slots'), JSON.stringify({ apply: c.apply, inject: c.inject }));
